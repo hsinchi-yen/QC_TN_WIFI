@@ -1,0 +1,17 @@
+[Unit]
+Description=iperf Server Daemon 5001
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=idle
+ExecStart=/usr/bin/iperf -s -i 5 -p 5001
+StandardOutput=append:/var/log/iperf2-server-5001.log
+StandardError=append:/var/log/iperf2-server-5001.log
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=5
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target
