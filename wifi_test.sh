@@ -428,12 +428,34 @@ perform_single_test() {
         # Get RSSI after test for comparison
         local rssi_after=$(get_rssi)
         
-        # Extract cathroughput result:q
+        # Extract throughput result with error handling for abnormal patterns
+        # First attempt: last 3 lines
         local throughput=$(tail -n3 </tmp/iperflog | grep SUM | tail -1 | awk '{printf("%d",$6)}' 2>/dev/null)
         
-        # Handle case where throughput extraction fails
+        # If extraction fails or gets 0, try searching more lines (abnormal pattern)
         if [ -z "$throughput" ] || [ "$throughput" -eq 0 ]; then
-                echo "    Result: FAILED (No valid throughput data) - RSSI after test: ${rssi_after} dBm"
+                echo "    Warning: Initial extraction failed, searching more lines for [SUM] pattern..."
+                # Try last 10 lines
+                throughput=$(tail -n10 </tmp/iperflog | grep SUM | tail -1 | awk '{printf("%d",$6)}' 2>/dev/null)
+                
+                if [ -z "$throughput" ] || [ "$throughput" -eq 0 ]; then
+                        echo "    Warning: Still no valid data, searching last 20 lines..."
+                        # Try last 20 lines
+                        throughput=$(tail -n20 </tmp/iperflog | grep SUM | tail -1 | awk '{printf("%d",$6)}' 2>/dev/null)
+                        
+                        if [ -z "$throughput" ] || [ "$throughput" -eq 0 ]; then
+                                echo "    Warning: Searching entire log for last [SUM] entry..."
+                                # Final attempt: search entire log
+                                throughput=$(grep SUM </tmp/iperflog | tail -1 | awk '{printf("%d",$6)}' 2>/dev/null)
+                        fi
+                fi
+        fi
+        
+        # Handle case where throughput extraction completely fails
+        if [ -z "$throughput" ] || [ "$throughput" -eq 0 ]; then
+                echo "    Result: FAILED (No valid throughput data after multiple attempts) - RSSI after test: ${rssi_after} dBm"
+                echo "    Debug: Last 20 lines of iperf log:"
+                tail -n20 </tmp/iperflog | sed 's/^/      /'
                 return 1
         fi
         

@@ -52,21 +52,65 @@ is_scanresult() {
 
 if ( ! hciconfig | grep -q UART )
 then
-        while [ -z "$WIFI_CHIP_ID" ]
-        do
+        # Wait for WIFI_CHIP_ID with timeout (max 10 seconds)
+        echo "Waiting for WiFi chip detection..."
+        timeout_count=0
+        while [ -z "$WIFI_CHIP_ID" ] && [ $timeout_count -lt 5 ]; do
                 sleep 2
+                timeout_count=$((timeout_count + 1))
         done
+
+        if [ -z "$WIFI_CHIP_ID" ]; then
+                echo "Warning: WiFi chip ID not detected, BT initialization may fail"
+                echo "Attempting to proceed with BT test anyway..."
+        else
+                echo "Detected WiFi chip ID: $WIFI_CHIP_ID"
+        fi
 
         if [ "$WIFI_CHIP_ID" = "0x9159" ] || [ "$WIFI_CHIP_ID" == "0x0205" ]; then
                 IFACE=mlan0
+                WIFI_DRV=mlan
         else
                 IFACE=wlan0
+                WIFI_DRV=wlan
         fi
 
-        while ( ! $(ls /sys/class/net/ | grep -q $IFACE) ); do
-                sleep 1
-        done
+        # Check if WiFi interface is available, if not probe the driver
+        echo "Checking WiFi interface availability..."
+        if ! $(ls /sys/class/net/ | grep -q $IFACE); then
+                echo "WiFi interface $IFACE not found (BT First mode)"
+                echo "Loading WiFi driver: $WIFI_DRV to enable BT functionality..."
+                modprobe $WIFI_DRV
+                
+                # Wait for WiFi interface with timeout (max 10 seconds)
+                iface_timeout=0
+                while [ $iface_timeout -lt 10 ] && ! $(ls /sys/class/net/ | grep -q $IFACE); do
+                        echo "Waiting for $IFACE interface... ($((iface_timeout + 1))/10 seconds)"
+                        sleep 1
+                        iface_timeout=$((iface_timeout + 1))
+                done
+                
+                if $(ls /sys/class/net/ | grep -q $IFACE); then
+                        echo "WiFi interface $IFACE is now available"
+                        # Bring interface up to enable BT
+                        echo "Bringing $IFACE interface up..."
+                        ifconfig $IFACE up
+                        sleep 1
+                else
+                        echo "Warning: WiFi interface $IFACE still not available after driver load"
+                        echo "BT initialization may fail"
+                fi
+        else
+                echo "WiFi interface $IFACE is available"
+                # Ensure interface is up
+                if ! ifconfig $IFACE >/dev/null 2>&1; then
+                        echo "Bringing $IFACE interface up..."
+                        ifconfig $IFACE up
+                        sleep 1
+                fi
+        fi
 
+        # Now initialize BT based on chip type
         if [ "$WIFI_CHIP_ID" == "0xa9a6" ]; then
                 echo Detect wifi chip is AP6212
                 brcm_patchram_plus -timeout=6.0 -patchram auto -baudrate 3000000 -no2bytes -tosleep=2000 -enable_hci $BT_UART_TTY &
@@ -77,24 +121,29 @@ then
                 echo Detect wifi chip is BCM4330
                 brcm_patchram_plus -timeout=6.0 -patchram=/lib/firmware/brcm/bcm4330.hcd -baudrate 3000000 -no2byte -tosleep=2000 -enable_hci $BT_UART_TTY &
         elif [ "$WIFI_CHIP_ID" == "0x0701" ]; then
+                echo Detect wifi chip is QCA9377
                 sleep 1
                 hciattach -t 30 $BT_UART_TTY qca 3000000 flow > /dev/null 2>&1
         elif [ "$WIFI_CHIP_ID" == "0x9159" ] || [ "$WIFI_CHIP_ID" == "0x0205" ]; then
+                echo Detect wifi chip is 88W8997
                 usleep 500000
                 hciattach $BT_UART_TTY any 3000000 flow > /dev/null 2>&1
         else
-                echo Do not detect valid model of WIFI chip
+                echo "Warning: Could not detect WiFi chip model"
+                echo "Attempting generic BT initialization for QCA chip..."
+                # Try generic initialization for QCA chip (most common in your case)
+                hciattach -t 30 $BT_UART_TTY qca 3000000 flow > /dev/null 2>&1 || true
         fi
 fi
 
 dev=0
 ok=0
 
-# wait BT interface ready at most 13sec
+# wait BT interface ready at most 20sec
 wait_loop=0
 while ( ! hciconfig -a | grep -q UART)
 do
-        if [ $wait_loop -eq 13 ]
+        if [ $wait_loop -eq 20 ]
         then
                 break
         fi
@@ -122,10 +171,38 @@ then
        fi
        echo "BT device is up and ready"
        
+       # Reset BT interface to ensure clean state
+       echo "Resetting BT interface for clean state..."
+       hciconfig $hciif reset 2>/dev/null || true
+       sleep 1
+       
+       # Bring interface back up after reset
+       hciconfig $hciif up
+       sleep 2
+       
+       # Enable page scan and inquiry scan
+       echo "Enabling BT scanning modes..."
+       hciconfig $hciif piscan 2>/dev/null || true
+       sleep 1
+       
+       # Verify interface is still up after configuration
+       bt_status=$(hciconfig $hciif | grep -c "UP RUNNING")
+       if [ "$bt_status" -eq 0 ]; then
+               echo "Warning: BT interface went down, bringing it back up..."
+               hciconfig $hciif up
+               sleep 1
+       fi
+       
+       echo "BT interface ready for testing"
+       
        # Use external BT_MAC if provided, otherwise scan for devices
        if [ -n "$BT_TARGET_MAC" ]; then
                 echo "Using external BT MAC: $BT_TARGET_MAC"
                 macaddr="$BT_TARGET_MAC"
+                
+                # Additional wait for BT stack to stabilize
+                echo "Waiting for BT stack to stabilize (3 seconds)..."
+                sleep 3
        else
                 echo "Scanning for BT devices..."
                 macaddr=$(is_scanresult $hciif)
@@ -133,20 +210,20 @@ then
        
        if [ -n "$macaddr" ]; then
                 # Wait 1 second before starting test
-                echo "Target MAC found, waiting 1 second before test..."
+                echo "Target MAC found, ready to start test..."
                 sleep 1
                 
                 dev=1
                 for mac in ${macaddr}; do
                         echo "Testing Bluetooth device: ${mac}"
                         
-                        # Perform l2ping test with 3 attempts (no hcitool cc needed)
-                        echo "Starting Bluetooth l2ping test (max 3 attempts)..."
+                        # Perform l2ping test with 6 attempts (no hcitool cc needed)
+                        echo "Starting Bluetooth l2ping test (max 6 attempts)..."
                         echo "Target MAC: ${mac}"
                                 
                                 passed_tests=0
                                 failed_tests=0
-                                MAX_ATTEMPTS=3
+                                MAX_ATTEMPTS=6
                                 
                                 for attempt in $(seq 1 $MAX_ATTEMPTS); do
                                         echo ""

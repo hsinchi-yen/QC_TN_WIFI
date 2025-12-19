@@ -126,8 +126,25 @@ class SerialWorker(QThread):
                     # 發送 Ctrl+C 中斷
                     self.serial_conn.write(b'\x03')
                     self.log_received.emit("\n>>> Sent Ctrl+C (Termination signal)")
+                    time.sleep(1.0)
+                    self.serial_conn.write(b'\x03')
+                    self.log_received.emit("\n>>> Sent Ctrl+C (Termination signal)")
+                    time.sleep(1.0)
+                    
+                    # 發送 Ctrl+Z 完全終止腳本
+                    self.serial_conn.write(b'\x1a')
+                    self.log_received.emit(">>> Sent Ctrl+Z (Full termination)")
                     time.sleep(0.5)
-                    self.wait_for_prompt()
+                    self.serial_conn.write(b'\x1a')
+                    self.log_received.emit(">>> Sent Ctrl+Z (Full termination)")
+                    time.sleep(0.5)
+                    
+                    # 確認 prompt 是否出現
+                    if self.wait_for_prompt():
+                        self.log_received.emit(">>> Prompt detected - Test fully terminated")
+                    else:
+                        self.log_received.emit(">>> Warning: Prompt not detected after termination")
+                    
                     self.status_changed.emit("Terminated")
                     self.test_completed.emit("TERMINATED", "SKIP", self.full_log, "")
                     break
@@ -1232,12 +1249,40 @@ class WiFiTestGUI(QMainWindow):
     
     def clear_sn_mac(self):
         """清除 SN,MAC 欄位並重新啟用輸入"""
+        # 清空 SN,MAC 輸入
         self.sn_mac_input.clear()
         self.sn_mac_input.setPlaceholderText("Enter SN,MAC (e.g., 217522140692,001F7B1E2A54)")
         
-        # 重置 WiFi 和 BT 狀態顯示
+        # 重置 WiFi 和 BT 狀態顯示為初始狀態 (---)
         self.update_test_status_color(self.wifi_status_label, "IDLE")
         self.update_test_status_color(self.bt_status_label, "IDLE")
+        
+        # 重置 Overall 狀態為 Stop
+        self.update_status_color("Stop")
+        
+        # 重置測試時間為 00:00
+        self.test_elapsed_seconds = 0
+        self.time_label.setText("00:00")
+        
+        # 停止測試計時器（如果正在運行）
+        if self.test_timer.isActive():
+            self.test_timer.stop()
+        
+        # 清空 Log 顯示區
+        self.log_display.clear()
+        
+        # 確保按鈕狀態正確
+        self.start_btn.setEnabled(True)
+        self.terminate_btn.setEnabled(False)
+        
+        # 如果有正在運行的測試，停止它
+        if self.serial_worker and self.serial_worker.isRunning():
+            self.serial_worker.terminate_test()
+            self.serial_worker.wait()  # 等待線程結束
+            self.serial_worker = None
+        
+        # 檢查當前選擇的端口連接狀態
+        self.check_port_connection()
     
     def on_sn_mac_changed(self, text):
         """當 SN,MAC 輸入改變時檢查是否符合格式並自動啟動測試"""
