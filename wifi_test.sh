@@ -522,10 +522,28 @@ test_band() {
                                 else
                                         failed_tests=$((failed_tests + 1))
                                         if [ $attempt -lt $MAX_ATTEMPTS ]; then
-                                                echo "  Attempt $attempt failed - continuing to next attempt"
+                                                echo "  Attempt $attempt failed - reconnecting WiFi for next attempt"
+                                                echo "  Disconnecting from $band band..."
+                                                disconnect
+                                                sleep 2
+                                                
+                                                echo "  Reconnecting to $band band..."
+                                                if ( is_ap_connected "$config_file" ); then
+                                                        if ( is_ipget ); then
+                                                                echo "  Reconnected successfully. IP address: $(getipaddr)"
+                                                                sleep 1
+                                                        else
+                                                                echo "  ERROR: Failed to get IP address after reconnection"
+                                                                echo "  Continuing to next attempt anyway..."
+                                                                sleep 1
+                                                        fi
+                                                else
+                                                        echo "  ERROR: Failed to reconnect to WiFi"
+                                                        echo "  Continuing to next attempt anyway..."
+                                                        sleep 1
+                                                fi
                                         fi
                                 fi
-                                sleep 1  # Brief pause between attempts
                         done
                         
                         # Display final WiFi connection status

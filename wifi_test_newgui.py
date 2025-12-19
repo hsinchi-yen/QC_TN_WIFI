@@ -452,12 +452,103 @@ class SerialWorker(QThread):
             self.serial_conn.close()
 
 
+class ConsoleWatchWorker(QThread):
+    """Console watch thread for monitoring serial output"""
+    log_received = pyqtSignal(str)
+    prompt_detected = pyqtSignal()
+    
+    def __init__(self, port, baudrate=115200):
+        super().__init__()
+        self.port = port
+        self.baudrate = baudrate
+        self.serial_conn = None
+        self.should_stop = False
+        
+    @staticmethod
+    def clean_terminal_output(text):
+        """清理終端控制字符"""
+        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+        text = ansi_escape.sub('', text)
+        
+        if '\r' in text:
+            lines = text.split('\n')
+            cleaned_lines = []
+            for line in lines:
+                if '\r' in line:
+                    parts = line.split('\r')
+                    non_empty = [p for p in parts if p.strip()]
+                    if non_empty:
+                        cleaned_lines.append(non_empty[-1])
+                else:
+                    cleaned_lines.append(line)
+            text = '\n'.join(cleaned_lines)
+        
+        return text
+    
+    def run(self):
+        """Watch console output continuously"""
+        try:
+            self.serial_conn = serial.Serial(
+                port=self.port,
+                baudrate=self.baudrate,
+                bytesize=serial.EIGHTBITS,
+                parity=serial.PARITY_NONE,
+                stopbits=serial.STOPBITS_ONE,
+                timeout=0.5
+            )
+            
+            # Send Enter to trigger prompt
+            self.serial_conn.write(b'\n')
+            time.sleep(0.2)
+            
+            buffer = ""
+            while not self.should_stop:
+                if self.serial_conn.in_waiting > 0:
+                    try:
+                        data = self.serial_conn.read(self.serial_conn.in_waiting).decode('utf-8', errors='ignore')
+                        buffer += data
+                        
+                        # Clean and emit output
+                        cleaned_data = self.clean_terminal_output(data)
+                        if cleaned_data and cleaned_data.strip():
+                            self.log_received.emit(cleaned_data.rstrip())
+                        
+                        # Check for prompt
+                        if "_qc:~#" in buffer or "root@" in buffer:
+                            self.log_received.emit("\n>>> Prompt detected - Watch mode stopped")
+                            self.prompt_detected.emit()
+                            break
+                            
+                    except Exception as e:
+                        self.log_received.emit(f"Error reading serial: {str(e)}")
+                
+                time.sleep(0.1)  # Update interval
+                
+        except serial.SerialException as e:
+            self.log_received.emit(f"Serial port error: {str(e)}")
+        except Exception as e:
+            self.log_received.emit(f"Unexpected error: {str(e)}")
+        finally:
+            self.cleanup()
+    
+    def stop_watching(self):
+        """Stop watching console"""
+        self.should_stop = True
+    
+    def cleanup(self):
+        """Clean up serial connection"""
+        if self.serial_conn and self.serial_conn.is_open:
+            self.serial_conn.close()
+
+
 class WiFiTestGUI(QMainWindow):
     """WiFi壓力測試主視窗"""
     
     def __init__(self):
         super().__init__()
         self.serial_worker = None
+        self.watch_worker = None
+        self.watch_mode = False
         self.test_elapsed_seconds = 0
         self.host_bt_mac = ""  # 初始化 BT MAC 變數
         self.init_ui()
@@ -998,6 +1089,28 @@ class WiFiTestGUI(QMainWindow):
         log_layout = QVBoxLayout()
         log_group.setLayout(log_layout)
         
+        # Watch button - placed in log header area
+        log_header_layout = QHBoxLayout()
+        log_header_layout.addStretch()
+        
+        self.watch_btn = QPushButton("Watch")
+        self.watch_btn.clicked.connect(self.toggle_watch_mode)
+        self.watch_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #17a2b8;
+                color: white;
+                border: none;
+                padding: 5px 15px;
+                border-radius: 3px;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #138496;
+            }
+        """)
+        log_header_layout.addWidget(self.watch_btn)
+        log_layout.addLayout(log_header_layout)
+        
         self.log_display = QTextEdit()
         self.log_display.setReadOnly(True)
         self.log_display.setFont(QFont("Courier New", 9))
@@ -1281,6 +1394,10 @@ class WiFiTestGUI(QMainWindow):
             self.serial_worker.wait()  # 等待線程結束
             self.serial_worker = None
         
+        # 如果正在 watch mode，停止它
+        if self.watch_mode:
+            self.stop_watch_mode()
+        
         # 檢查當前選擇的端口連接狀態
         self.check_port_connection()
     
@@ -1390,8 +1507,113 @@ class WiFiTestGUI(QMainWindow):
         """)
         self.status_label.setText(status)
     
+    def toggle_watch_mode(self):
+        """Toggle watch mode on/off"""
+        if self.watch_mode:
+            self.stop_watch_mode()
+        else:
+            self.start_watch_mode()
+    
+    def start_watch_mode(self):
+        """Start console watch mode"""
+        # Validate port selection
+        if self.port_combo.currentText() == "No valid ports found":
+            self.log_display.append("ERROR: No valid UART port selected!")
+            return
+        
+        # Get port name
+        port_text = self.port_combo.currentText()
+        port = port_text.split(' - ')[0]
+        
+        # Clear log and start watching
+        self.log_display.clear()
+        self.log_display.append("=" * 60)
+        self.log_display.append("Console Watch Mode Started")
+        self.log_display.append(f"Port: {port}")
+        self.log_display.append("Monitoring console output...")
+        self.log_display.append("Waiting for prompt: _qc:~#")
+        self.log_display.append("=" * 60)
+        
+        # Update UI state
+        self.watch_mode = True
+        self.watch_btn.setText("Stop Watch")
+        self.watch_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #e67e22;
+                color: white;
+                border: none;
+                padding: 5px 15px;
+                border-radius: 3px;
+            }
+            QPushButton:hover {
+                background-color: #d35400;
+            }
+        """)
+        self.start_btn.setEnabled(False)
+        self.terminate_btn.setEnabled(False)
+        self.update_status_color("Ready")
+        
+        # Start watch worker thread
+        self.watch_worker = ConsoleWatchWorker(port)
+        self.watch_worker.log_received.connect(self.append_log)
+        self.watch_worker.prompt_detected.connect(self.stop_watch_mode)
+        self.watch_worker.start()
+    
+    def stop_watch_mode(self):
+        """Stop console watch mode"""
+        if not self.watch_mode:
+            return
+        
+        # Stop watch worker
+        if self.watch_worker and self.watch_worker.isRunning():
+            self.watch_worker.stop_watching()
+            self.watch_worker.wait()
+            self.watch_worker = None
+        
+        # Update UI state
+        self.watch_mode = False
+        self.watch_btn.setText("Watch")
+        self.watch_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #17a2b8;
+                color: white;
+                border: none;
+                padding: 5px 15px;
+                border-radius: 3px;
+            }
+            QPushButton:hover {
+                background-color: #138496;
+            }
+        """)
+        self.start_btn.setEnabled(True)
+        self.terminate_btn.setEnabled(False)
+        
+        # Reset WiFi and BT status to IDLE (like Clear button)
+        self.update_test_status_color(self.wifi_status_label, "IDLE")
+        self.update_test_status_color(self.bt_status_label, "IDLE")
+        
+        # Update Overall status to Ready (device is ready for testing)
+        self.update_status_color("Ready")
+        
+        # Reset test time to 00:00
+        self.test_elapsed_seconds = 0
+        self.time_label.setText("00:00")
+        
+        # Stop test timer if running
+        if self.test_timer.isActive():
+            self.test_timer.stop()
+        
+        self.log_display.append("\n" + "=" * 60)
+        self.log_display.append("Console Watch Mode Stopped")
+        self.log_display.append("Device Ready for Testing")
+        self.log_display.append("=" * 60)
+    
     def start_test(self):
         """開始測試"""
+        # Stop watch mode if active
+        if self.watch_mode:
+            self.stop_watch_mode()
+        
         # 驗證輸入
         if self.port_combo.currentText() == "No valid ports found":
             self.log_display.append("ERROR: No valid UART port selected!")
@@ -1431,6 +1653,7 @@ class WiFiTestGUI(QMainWindow):
         
         # 禁用開始按鈕,啟用終止按鈕
         self.start_btn.setEnabled(False)
+        self.watch_btn.setEnabled(False)
         self.terminate_btn.setEnabled(True)
         
         # 保存 SN 和 MAC 供後續使用
@@ -1569,6 +1792,7 @@ class WiFiTestGUI(QMainWindow):
         
         # 恢復按鈕狀態
         self.start_btn.setEnabled(True)
+        self.watch_btn.setEnabled(True)
         self.terminate_btn.setEnabled(False)
         
         # 顯示完成消息
