@@ -17,7 +17,8 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QTextEdit, QLineEdit, QGroupBox, QGridLayout,
                              QSizePolicy)
 from PyQt5.QtCore import QThread, pyqtSignal, QTimer, Qt
-from PyQt5.QtGui import QFont, QPalette, QColor
+from PyQt5.QtGui import QFont, QPalette, QColor, QPixmap
+from PyQt5.QtSvg import QSvgWidget
 import re
 import time
 
@@ -566,13 +567,35 @@ class WiFiTestGUI(QMainWindow):
         main_layout = QVBoxLayout()
         main_widget.setLayout(main_layout)
         
-        # 標題
-        title_label = QLabel("WiFi / Bluetooth Stress Test - Burn In")
+        # 標題區（包含 Logo 和文字）
+        title_layout = QHBoxLayout()
+        
+        # 左側占位空間（保持居中對齊）
+        left_spacer = QLabel("")
+        left_spacer.setFixedWidth(120)
+        title_layout.addWidget(left_spacer)
+        
+        # 中間標題文字
+        title_label = QLabel("WiFi / Bluetooth Stress Test")
         title_font = QFont("Arial", 16, QFont.Bold)
         title_label.setFont(title_font)
         title_label.setAlignment(Qt.AlignCenter)
         title_label.setStyleSheet("color: #2c3e50; padding: 10px;")
-        main_layout.addWidget(title_label)
+        title_layout.addWidget(title_label, 1)  # stretch factor 1 to center the title
+        
+        # 右側 Logo
+        logo_path = "technexion_logo103770.svg"
+        if os.path.exists(logo_path):
+            logo_widget = QSvgWidget(logo_path)
+            logo_widget.setFixedSize(120, 40)  # 調整 Logo 大小
+            title_layout.addWidget(logo_widget)
+        else:
+            # 如果 Logo 不存在，顯示占位空間
+            logo_placeholder = QLabel("")
+            logo_placeholder.setFixedWidth(120)
+            title_layout.addWidget(logo_placeholder)
+        
+        main_layout.addLayout(title_layout)
         
         # 設備信息區
         info_group = QGroupBox("Device Information")
