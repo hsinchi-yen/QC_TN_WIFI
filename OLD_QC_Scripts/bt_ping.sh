@@ -152,39 +152,8 @@ do
 done
 
 hciif=$(hciconfig -a | grep "Bus: UART" | cut -d ':' -f1)
-
-# Check if hci interface was detected
-if [ -z "$hciif" ]; then
-        echo ""
-        echo "========================================"
-        echo "ERROR: BT device (hci0/hciX) not found!"
-        echo "========================================"
-        echo "Bluetooth initialization failed after 20 seconds"
-        echo ""
-        echo "Diagnostic information:"
-        echo "----------------------------------------"
-        echo "hciconfig output:"
-        hciconfig -a 2>&1 || echo "hciconfig command failed"
-        echo "----------------------------------------"
-        echo ""
-        echo "Available network interfaces:"
-        ls /sys/class/net/ 2>&1
-        echo "----------------------------------------"
-        echo ""
-        echo "Bluetooth processes:"
-        ps | grep -E "hci|brcm_patchram" | grep -v grep || echo "No BT processes found"
-        echo "----------------------------------------"
-        echo ""
-        echo "Bluetooth Test Result: FAILED"
-        echo "Reason: HCI device not detected"
-        echo "========================================"
-        exit 1
-fi
-
 if [ -n "$hciif" ]
 then
-       echo "BT interface detected: $hciif"
-       
        # Stop existing processes before BT test
        stop_existing_processes
        
@@ -355,19 +324,4 @@ then
                 echo "Warning: BT device may still be present"
                 hciconfig -a
         fi
-fi
-
-# Exit with proper code based on test result
-if [ $ok -eq 1 ]; then
-        echo ""
-        echo "========================================"
-        echo "Bluetooth Test: PASSED"
-        echo "========================================"
-        exit 0
-else
-        echo ""
-        echo "========================================"
-        echo "Bluetooth Test: FAILED"
-        echo "========================================"
-        exit 1
 fi

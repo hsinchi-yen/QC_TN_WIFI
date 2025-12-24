@@ -117,10 +117,6 @@ show_help() {
     echo "  -c, --channel PRIORITY  Set WiFi band test priority"
     echo "                          ax = Test 5G band first (default)"
     echo "                          bgn = Test 2.4G band first"
-    echo "  -s, --ssid GROUP        Set WiFi SSID configuration group"
-    echo "                          solo = Use solo WiFi configuration (default)"
-    echo "                          grpa = Use STA group A configuration"
-    echo "                          grpb = Use STA group B configuration"
     echo ""
     echo "TEST LEVELS:"
     echo "  l0 (10s)  : Rapid check test"
@@ -133,30 +129,21 @@ show_help() {
     echo "  ax (default) : Test 5G band first, then 2.4G band"
     echo "  bgn          : Test 2.4G band first, then 5G band"
     echo ""
-    echo "SSID GROUPS:"
-    echo "  solo (default) : Uses wifi_grp/solo_wifi24g.conf and wifi_grp/solo_wifi5g.conf"
-    echo "  grpa           : Uses wifi_grp/sta_a_wifi24g.conf and wifi_grp/sta_a_wifi5g.conf"
-    echo "  grpb           : Uses wifi_grp/sta_b_wifi24g.conf and wifi_grp/sta_b_wifi5g.conf"
-    echo ""
     echo "EXAMPLES:"
-    echo "  $0                      # Use defaults (l2 duration, 5s interval, ax priority, solo)"
-    echo "  $0 -d l0               # Use 10s duration, 5s interval, ax priority, solo"
-    echo "  $0 -d l1 -c bgn        # Use 30s duration, test 2.4G first, solo"
-    echo "  $0 -d l3 -i 10 -c ax   # Use 180s duration, 10s interval, 5G first, solo"
-    echo "  $0 -c bgn              # Use default duration, test 2.4G first, solo"
-    echo "  $0 -d 90 -c ax         # Use 90s duration, test 5G first, solo"
-    echo "  $0 -s grpa             # Use STA group A configuration"
-    echo "  $0 -s grpb -c bgn      # Use STA group B, test 2.4G first"
-    echo "  $0 -s                  # Empty -s uses solo (default)"
+    echo "  $0                      # Use defaults (l2 duration, 5s interval, ax priority)"
+    echo "  $0 -d l0               # Use 10s duration, 5s interval, ax priority"
+    echo "  $0 -d l1 -c bgn        # Use 30s duration, test 2.4G first"
+    echo "  $0 -d l3 -i 10 -c ax   # Use 180s duration, 10s interval, 5G first"
+    echo "  $0 -c bgn              # Use default duration, test 2.4G first"
+    echo "  $0 -d 90 -c ax         # Use 90s duration, test 5G first"
     echo ""
     exit 0
 }
 
 # Parse command line parameters
 IPERF_DURATION=120  # Default to l2 (120 seconds)
-IPERF_INTERVAL=1    # Default interval (changed to 1 second for detailed logging)
+IPERF_INTERVAL=5    # Default interval
 BAND_PRIORITY="ax"  # Default to 5G first
-SSID_GROUP="solo"   # Default to solo group
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -244,36 +231,6 @@ while [[ $# -gt 0 ]]; do
             esac
             shift 2
             ;;
-        -s|--ssid)
-            # Handle empty -s parameter (default to solo)
-            if [ -z "$2" ] || [[ "$2" == -* ]]; then
-                SSID_GROUP="solo"
-                echo "Using SSID group: solo (default)"
-                shift 1
-            else
-                case "$2" in
-                    "solo")
-                        SSID_GROUP="solo"
-                        echo "Using SSID group: solo"
-                        ;;
-                    "grpa")
-                        SSID_GROUP="grpa"
-                        echo "Using SSID group: grpa (STA group A)"
-                        ;;
-                    "grpb")
-                        SSID_GROUP="grpb"
-                        echo "Using SSID group: grpb (STA group B)"
-                        ;;
-                    *)
-                        echo "Error: Invalid SSID group parameter: $2"
-                        echo "Valid options: solo, grpa, grpb"
-                        echo "Use -h for help"
-                        exit 1
-                        ;;
-                esac
-                shift 2
-            fi
-            ;;
         *)
             echo "Error: Unknown parameter: $1"
             echo "Use -h for help"
@@ -282,30 +239,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Set WiFi configuration files based on SSID group
-case "$SSID_GROUP" in
-    "solo")
-        WIFI_5G_CONF="wifi_grp/solo_wifi5g.conf"
-        WIFI_24G_CONF="wifi_grp/solo_wifi24g.conf"
-        ;;
-    "grpa")
-        WIFI_5G_CONF="wifi_grp/sta_a_wifi5g.conf"
-        WIFI_24G_CONF="wifi_grp/sta_a_wifi24g.conf"
-        ;;
-    "grpb")
-        WIFI_5G_CONF="wifi_grp/sta_b_wifi5g.conf"
-        WIFI_24G_CONF="wifi_grp/sta_b_wifi24g.conf"
-        ;;
-esac
-
 # Show current configuration
 echo "Test Configuration:"
 echo "  Duration: $IPERF_DURATION seconds"
 echo "  Display Interval: $IPERF_INTERVAL seconds"
 echo "  Band Priority: $BAND_PRIORITY ($([ "$BAND_PRIORITY" = "ax" ] && echo "5G first" || echo "2.4G first"))"
-echo "  SSID Group: $SSID_GROUP"
-echo "  5G Config: $WIFI_5G_CONF"
-echo "  2.4G Config: $WIFI_24G_CONF"
 echo ""
 
 CPUBURN=no
@@ -318,8 +256,8 @@ IFACE=wlan0
 #NETWORK_MANAGER=connmanctl
 
 # Test configuration
-# Note: WIFI_5G_CONF and WIFI_24G_CONF will be set based on SSID_GROUP parameter
-# These are initialized after parameter parsing
+WIFI_5G_CONF="wifi5g.conf"
+WIFI_24G_CONF="wifi24g.conf"
 THROUGHPUT_5G_LIMIT=50  # 50M for 5G band
 THROUGHPUT_24G_LIMIT=10 # 15M for 2.4G band
 MAX_ATTEMPTS=3

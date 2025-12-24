@@ -15,126 +15,12 @@ from datetime import datetime
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QComboBox, QPushButton, 
                              QTextEdit, QLineEdit, QGroupBox, QGridLayout,
-                             QSizePolicy, QDialog)
+                             QSizePolicy)
 from PyQt5.QtCore import QThread, pyqtSignal, QTimer, Qt
 from PyQt5.QtGui import QFont, QPalette, QColor, QPixmap
 from PyQt5.QtSvg import QSvgWidget
 import re
 import time
-
-
-class ResultDialog(QDialog):
-    """測試結果彈出對話框"""
-    
-    def __init__(self, parent, result):
-        super().__init__(parent)
-        self.result = result
-        self.setup_ui()
-        self.setup_timer()
-        
-    def setup_ui(self):
-        """設置對話框UI"""
-        # 設置對話框屬性
-        self.setWindowTitle("Test Result")
-        self.setModal(True)  # 模態對話框
-        
-        # 計算大小和位置（主視窗的 3/4 大小，置中）
-        parent_geometry = self.parent().geometry()
-        dialog_width = parent_geometry.width() * 3 // 4
-        dialog_height = parent_geometry.height() * 3 // 4
-        self.setFixedSize(dialog_width, dialog_height)
-        
-        # 置中位置
-        x = parent_geometry.x() + (parent_geometry.width() - dialog_width) // 2
-        y = parent_geometry.y() + (parent_geometry.height() - dialog_height) // 2
-        self.move(x, y)
-        
-        # 設置背景顏色
-        self.setStyleSheet("QDialog { background-color: #95a5a6; }")
-        
-        # 建立佈局
-        layout = QVBoxLayout()
-        layout.setAlignment(Qt.AlignCenter)
-        
-        # 結果標籤（大號粗體）
-        result_label = QLabel(self.result)
-        result_font = QFont()
-        result_font.setPointSize(96)
-        result_font.setBold(True)
-        result_label.setFont(result_font)
-        result_label.setAlignment(Qt.AlignCenter)
-        
-        # 根據結果設置顏色
-        if self.result == "PASS":
-            result_label.setStyleSheet("QLabel { color: #27ae60; }")  # 綠色
-        else:  # FAIL
-            result_label.setStyleSheet("QLabel { color: #e74c3c; }")  # 紅色
-        
-        # 倒數計時標籤
-        self.countdown_label = QLabel("Window will auto-close in 10 seconds")
-        countdown_font = QFont()
-        countdown_font.setPointSize(12)
-        self.countdown_label.setFont(countdown_font)
-        self.countdown_label.setAlignment(Qt.AlignCenter)
-        self.countdown_label.setStyleSheet("QLabel { color: #2c3e50; }")
-        
-        # 關閉按鈕
-        close_btn = QPushButton("OK")
-        close_btn.setFixedSize(150, 50)
-        btn_font = QFont()
-        btn_font.setPointSize(14)
-        btn_font.setBold(True)
-        close_btn.setFont(btn_font)
-        close_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #34495e;
-                color: white;
-                border: 2px solid #2c3e50;
-                border-radius: 5px;
-            }
-            QPushButton:hover {
-                background-color: #2c3e50;
-            }
-            QPushButton:pressed {
-                background-color: #1a252f;
-            }
-        """)
-        close_btn.clicked.connect(self.accept)
-        
-        # 添加組件到佈局
-        layout.addStretch()
-        layout.addWidget(result_label)
-        layout.addSpacing(30)
-        layout.addWidget(self.countdown_label)
-        layout.addSpacing(30)
-        
-        # 按鈕置中容器
-        btn_container = QHBoxLayout()
-        btn_container.addStretch()
-        btn_container.addWidget(close_btn)
-        btn_container.addStretch()
-        layout.addLayout(btn_container)
-        layout.addStretch()
-        
-        self.setLayout(layout)
-    
-    def setup_timer(self):
-        """設置10秒自動關閉計時器"""
-        self.countdown_seconds = 10
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.update_countdown)
-        self.timer.start(1000)  # 每秒更新一次
-    
-    def update_countdown(self):
-        """更新倒數計時"""
-        self.countdown_seconds -= 1
-        if self.countdown_seconds > 0:
-            self.countdown_label.setText(
-                f"Window will auto-close in {self.countdown_seconds} seconds"
-            )
-        else:
-            self.timer.stop()
-            self.accept()  # 自動關閉對話框
 
 
 class SerialWorker(QThread):
@@ -666,7 +552,6 @@ class WiFiTestGUI(QMainWindow):
         self.watch_mode = False
         self.test_elapsed_seconds = 0
         self.host_bt_mac = ""  # 初始化 BT MAC 變數
-        self.test_terminated = False  # 測試是否被終止的旗標
         self.init_ui()
         self.refresh_ports()
         
@@ -682,10 +567,23 @@ class WiFiTestGUI(QMainWindow):
         main_layout = QVBoxLayout()
         main_widget.setLayout(main_layout)
         
-        # 標題區（包含 Logo 和文字）- Logo 在最左側
+        # 標題區（包含 Logo 和文字）
         title_layout = QHBoxLayout()
         
-        # 左側 Logo
+        # 左側占位空間（保持居中對齊）
+        left_spacer = QLabel("")
+        left_spacer.setFixedWidth(120)
+        title_layout.addWidget(left_spacer)
+        
+        # 中間標題文字
+        title_label = QLabel("WiFi / Bluetooth Stress Test")
+        title_font = QFont("Arial", 16, QFont.Bold)
+        title_label.setFont(title_font)
+        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setStyleSheet("color: #2c3e50; padding: 10px;")
+        title_layout.addWidget(title_label, 1)  # stretch factor 1 to center the title
+        
+        # 右側 Logo
         logo_path = "technexion_logo103770.svg"
         if os.path.exists(logo_path):
             logo_widget = QSvgWidget(logo_path)
@@ -696,19 +594,6 @@ class WiFiTestGUI(QMainWindow):
             logo_placeholder = QLabel("")
             logo_placeholder.setFixedWidth(120)
             title_layout.addWidget(logo_placeholder)
-        
-        # 中間標題文字
-        title_label = QLabel("WiFi / Bluetooth Stress Test")
-        title_font = QFont("Arial", 16, QFont.Bold)
-        title_label.setFont(title_font)
-        title_label.setAlignment(Qt.AlignCenter)
-        title_label.setStyleSheet("color: #2c3e50; padding: 10px;")
-        title_layout.addWidget(title_label, 1)  # stretch factor 1 to center the title
-        
-        # 右側占位空間（保持標題居中對齊）
-        right_spacer = QLabel("")
-        right_spacer.setFixedWidth(200)
-        title_layout.addWidget(right_spacer)
         
         main_layout.addLayout(title_layout)
         
@@ -785,7 +670,83 @@ class WiFiTestGUI(QMainWindow):
         
         main_layout.addWidget(info_group)
         
-        # Configuration 選項區 - 移到 Device Information 下方
+        # 狀態顯示區
+        status_group = QGroupBox("Test Status")
+        status_group.setStyleSheet("""
+            QGroupBox {
+                font-weight: bold;
+                border: 2px solid #3498db;
+                border-radius: 5px;
+                margin-top: 10px;
+                padding-top: 10px;
+            }
+        """)
+        status_layout = QHBoxLayout()
+        status_layout.setSpacing(10)  # 減少元件之間的間距
+        status_layout.setContentsMargins(10, 5, 10, 5)
+        status_group.setLayout(status_layout)
+        
+        # WiFi 狀態
+        wifi_label = QLabel("WiFi:")
+        wifi_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        status_layout.addWidget(wifi_label)
+        self.wifi_status_label = QLabel("---")
+        self.wifi_status_label.setFont(QFont("Arial", 14, QFont.Bold))
+        self.wifi_status_label.setAlignment(Qt.AlignCenter)
+        self.wifi_status_label.setMinimumHeight(40)
+        self.wifi_status_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.update_test_status_color(self.wifi_status_label, "IDLE")
+        status_layout.addWidget(self.wifi_status_label)
+
+        
+        # BT 狀態
+        bt_label = QLabel("BT:")
+        bt_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        status_layout.addWidget(bt_label)
+        self.bt_status_label = QLabel("---")
+        self.bt_status_label.setFont(QFont("Arial", 14, QFont.Bold))
+        self.bt_status_label.setAlignment(Qt.AlignCenter)
+        self.bt_status_label.setMinimumHeight(40)
+        self.bt_status_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.update_test_status_color(self.bt_status_label, "IDLE")
+        status_layout.addWidget(self.bt_status_label)
+
+        
+        # Overall 狀態
+        overall_label = QLabel("Overall:")
+        overall_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        status_layout.addWidget(overall_label)
+        self.status_label = QLabel("Stop")
+        self.status_label.setFont(QFont("Arial", 14, QFont.Bold))
+        self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setMinimumHeight(40)
+        self.status_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.update_status_color("Stop")
+        status_layout.addWidget(self.status_label)
+
+        
+        # 測試時間顯示
+        time_label = QLabel("Test Time:")
+        time_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        status_layout.addWidget(time_label)
+        self.time_label = QLabel("0 sec")
+        self.time_label.setFont(QFont("Arial", 14, QFont.Bold))
+        self.time_label.setAlignment(Qt.AlignCenter)
+        self.time_label.setMinimumHeight(40)
+        self.time_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.time_label.setStyleSheet("""
+            QLabel {
+                background-color: #34495e;
+                color: white;
+                border-radius: 5px;
+                padding: 5px;
+            }
+        """)
+        status_layout.addWidget(self.time_label)
+        
+        main_layout.addWidget(status_group)
+        
+        # Configuration 選項區
         config_group = QGroupBox("Configuration")
         config_group.setStyleSheet("""
             QGroupBox {
@@ -1084,48 +1045,6 @@ class WiFiTestGUI(QMainWindow):
         self.bt_mac_label.setVisible(False)  # 初始隱藏
         config_layout.addWidget(self.bt_mac_label)
         
-        config_layout.addStretch()
-        
-        # WIFI Station 選項
-        config_layout.addWidget(QLabel("WIFI Station:"))
-        self.station_combo = QComboBox()
-        self.station_combo.addItem("Solo")
-        self.station_combo.addItem("Station A")
-        self.station_combo.addItem("Station B")
-        self.station_combo.setCurrentIndex(0)  # 預設選擇 Solo
-        self.station_combo.setMinimumWidth(150)
-        self.station_combo.setStyleSheet("""
-            QComboBox {
-                padding: 5px;
-                border: 1px solid #3498db;
-                border-radius: 3px;
-                background-color: white;
-                color: #2c3e50;
-            }
-            QComboBox:hover {
-                border: 2px solid #2980b9;
-            }
-            QComboBox::drop-down {
-                border: none;
-            }
-            QComboBox::down-arrow {
-                image: none;
-                border-left: 5px solid transparent;
-                border-right: 5px solid transparent;
-                border-top: 5px solid #3498db;
-                width: 0;
-                height: 0;
-                margin-right: 5px;
-            }
-            QComboBox QAbstractItemView {
-                background-color: white;
-                color: #2c3e50;
-                selection-background-color: #3498db;
-                selection-color: white;
-            }
-        """)
-        config_layout.addWidget(self.station_combo)
-        
         main_layout.addWidget(config_group)
         
         # 檢測 BT MAC
@@ -1178,82 +1097,6 @@ class WiFiTestGUI(QMainWindow):
         button_layout.addWidget(self.terminate_btn)
         
         main_layout.addLayout(button_layout)
-        
-        # 狀態顯示區 - 移到 Test Execution Log 上方
-        status_group = QGroupBox("Test Status")
-        status_group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 2px solid #3498db;
-                border-radius: 5px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-        """)
-        status_layout = QHBoxLayout()
-        status_layout.setSpacing(10)  # 減少元件之間的間距
-        status_layout.setContentsMargins(10, 5, 10, 5)
-        status_group.setLayout(status_layout)
-        
-        # WiFi 狀態
-        wifi_label = QLabel("WiFi:")
-        wifi_label.setStyleSheet("font-weight: bold; font-size: 14px;")
-        status_layout.addWidget(wifi_label)
-        self.wifi_status_label = QLabel("---")
-        self.wifi_status_label.setFont(QFont("Arial", 14, QFont.Bold))
-        self.wifi_status_label.setAlignment(Qt.AlignCenter)
-        self.wifi_status_label.setMinimumHeight(40)
-        self.wifi_status_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.update_test_status_color(self.wifi_status_label, "IDLE")
-        status_layout.addWidget(self.wifi_status_label)
-
-        
-        # BT 狀態
-        bt_label = QLabel("BT:")
-        bt_label.setStyleSheet("font-weight: bold; font-size: 14px;")
-        status_layout.addWidget(bt_label)
-        self.bt_status_label = QLabel("---")
-        self.bt_status_label.setFont(QFont("Arial", 14, QFont.Bold))
-        self.bt_status_label.setAlignment(Qt.AlignCenter)
-        self.bt_status_label.setMinimumHeight(40)
-        self.bt_status_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.update_test_status_color(self.bt_status_label, "IDLE")
-        status_layout.addWidget(self.bt_status_label)
-
-        
-        # Overall 狀態
-        overall_label = QLabel("Overall:")
-        overall_label.setStyleSheet("font-weight: bold; font-size: 14px;")
-        status_layout.addWidget(overall_label)
-        self.status_label = QLabel("Stop")
-        self.status_label.setFont(QFont("Arial", 14, QFont.Bold))
-        self.status_label.setAlignment(Qt.AlignCenter)
-        self.status_label.setMinimumHeight(40)
-        self.status_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.update_status_color("Stop")
-        status_layout.addWidget(self.status_label)
-
-        
-        # 測試時間顯示
-        time_label = QLabel("Test Time:")
-        time_label.setStyleSheet("font-weight: bold; font-size: 14px;")
-        status_layout.addWidget(time_label)
-        self.time_label = QLabel("0 sec")
-        self.time_label.setFont(QFont("Arial", 14, QFont.Bold))
-        self.time_label.setAlignment(Qt.AlignCenter)
-        self.time_label.setMinimumHeight(40)
-        self.time_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.time_label.setStyleSheet("""
-            QLabel {
-                background-color: #34495e;
-                color: white;
-                border-radius: 5px;
-                padding: 5px;
-            }
-        """)
-        status_layout.addWidget(self.time_label)
-        
-        main_layout.addWidget(status_group)
         
         # Log顯示區
         log_group = QGroupBox("Test Execution Log")
@@ -1794,9 +1637,6 @@ class WiFiTestGUI(QMainWindow):
         if self.watch_mode:
             self.stop_watch_mode()
         
-        # 重置終止旗標
-        self.test_terminated = False
-        
         # 驗證輸入
         if self.port_combo.currentText() == "No valid ports found":
             self.log_display.append("ERROR: No valid UART port selected!")
@@ -1857,32 +1697,20 @@ class WiFiTestGUI(QMainWindow):
         else:
             test_level = "l2"  # 預設
         
-        # 檢查 WIFI Station 選擇
-        station_index = self.station_combo.currentIndex()
-        if station_index == 0:  # Solo
-            ssid_param = "solo"
-        elif station_index == 1:  # Station A
-            ssid_param = "grpa"
-        elif station_index == 2:  # Station B
-            ssid_param = "grpb"
-        else:
-            ssid_param = "solo"  # 預設
-        
-        # 根據選擇的 band、test level 和 WIFI Station 生成測試命令
+        # 根據選擇的 band 和 test level 生成測試命令
         # 注意：當 BT First 時，WiFi 測試固定為 5G 優先
         if bt_first:
-            test_command = f"bash wifi_test.sh -d {test_level} -s {ssid_param}"  # 固定使用 5G 優先
+            test_command = f"bash wifi_test.sh -d {test_level}"  # 固定使用 5G 優先
             band_info = "5G (BT First mode)"
         elif self.band_5g_btn.isChecked():
-            test_command = f"bash wifi_test.sh -d {test_level} -s {ssid_param}"
+            test_command = f"bash wifi_test.sh -d {test_level}"
             band_info = "5G"
         else:  # 2.4G
-            test_command = f"bash wifi_test.sh -d {test_level} -c bgn -s {ssid_param}"
+            test_command = f"bash wifi_test.sh -d {test_level} -c bgn"
             band_info = "2.4G"
         
         self.log_display.append(f"Band: {band_info}")
         self.log_display.append(f"Test Level: {test_level.upper()}")
-        self.log_display.append(f"WIFI Station: {self.station_combo.currentText()}")
         self.log_display.append(f"Command: {test_command}")
         self.log_display.append("=" * 60)
         
@@ -1925,7 +1753,6 @@ class WiFiTestGUI(QMainWindow):
     def terminate_test(self):
         """終止測試"""
         if self.serial_worker:
-            self.test_terminated = True  # 設置終止旗標
             self.log_display.append("\n" + "=" * 60)
             self.log_display.append("TERMINATING TEST...")
             self.log_display.append("=" * 60)
@@ -1982,6 +1809,10 @@ class WiFiTestGUI(QMainWindow):
         else:
             final_result = "PASS" if wifi_result == "PASS" and bt_result == "PASS" else "FAIL"
         
+        # 只有在設備連接成功的情況下才保存 Log
+        if final_result != "NOT_CONNECTED":
+            self.save_log(wifi_result, bt_result, full_log, bt_mac)
+        
         # 恢復按鈕狀態
         self.start_btn.setEnabled(True)
         self.watch_btn.setEnabled(True)
@@ -2004,18 +1835,6 @@ class WiFiTestGUI(QMainWindow):
                 self.log_display.append(f"BT Result: {bt_result}")
             self.log_display.append(f"Final Result: {final_result}")
             self.log_display.append("=" * 60)
-            
-            # 只有在測試未被終止且結果為 PASS 或 FAIL 時才顯示結果對話框
-            if not self.test_terminated and final_result in ["PASS", "FAIL"]:
-                # 顯示結果對話框
-                dialog = ResultDialog(self, final_result)
-                dialog.exec_()  # 模態顯示，等待對話框關閉
-                
-                # 對話框關閉後才保存 Log
-                self.save_log(wifi_result, bt_result, full_log, bt_mac)
-            elif final_result != "NOT_CONNECTED":
-                # 如果測試被終止或其他情況，直接保存 Log（不顯示對話框）
-                self.save_log(wifi_result, bt_result, full_log, bt_mac)
     
     def save_log(self, wifi_result, bt_result, log_content, bt_mac):
         """保存Log文件"""
