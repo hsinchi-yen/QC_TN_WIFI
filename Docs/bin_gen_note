@@ -1,0 +1,100 @@
+pyinstaller --onefile --windowed --name="WiFiStressTest" --env QT_QPA_PLATFORM=wayland  wifi_test_newgui.py
+
+pyinstaller --onefile --windowed --name "WiFiStressTest" wifi_test_newgui.py
+
+
+Step 1: 準備環境
+# 安裝必要工具
+sudo apt update
+sudo apt install -y python3 python3-pip
+
+# 安裝 Python 套件
+pip3 install PyQt5 pyserial pyinstaller
+
+
+Step 2: 準備文件
+# 創建工作目錄
+mkdir -p ~/wifi_test_build
+cd ~/wifi_test_build
+
+# 複製需要的文件（假設文件在 D:\PD_Test\PD_ATE）
+# 在 Windows WSL 或 Linux 環境中：
+cp /path/to/wifi_test_newgui.py .
+cp /path/to/technexion_logo103770.svg .
+
+# 確認文件存在
+ls -lh
+
+Step 3: 創建 PyInstaller Spec 文件
+創建 wifi_test_newgui.spec 文件：
+
+cat > wifi_test_newgui.spec << 'EOF'
+# -*- mode: python ; coding: utf-8 -*-
+
+block_cipher = None
+
+a = Analysis(
+    ['wifi_test_newgui.py'],
+    pathex=[],
+    binaries=[],
+    datas=[
+        ('technexion_logo103770.svg', '.'),  # 只打包 Logo
+    ],
+    hiddenimports=[
+        'PyQt5.QtCore',
+        'PyQt5.QtGui',
+        'PyQt5.QtWidgets',
+        'PyQt5.QtSvg',
+        'serial',
+        'serial.tools',
+        'serial.tools.list_ports',
+    ],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
+    cipher=block_cipher,
+    noarchive=False,
+)
+
+pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    [],
+    name='WiFiTestTool',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=True,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
+EOF
+
+Step 4: 建置可執行文件
+
+# 清理舊的建置文件（如果有）
+rm -rf build dist __pycache__
+
+# 建置
+pyinstaller wifi_test_newgui.spec
+
+# 檢查結果
+ls -lh dist/WiFiTestTool
+
+
+
+

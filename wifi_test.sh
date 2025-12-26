@@ -25,6 +25,17 @@
 # - Added support for fixed IP configuration and DHCP fallback
 # - Improved error handling and user feedback
 #################################################################################
+# date: 2025-12-24
+# update: SSID Group Selection and Detailed Logging Enhancement
+# - Added -s/--ssid parameter for WiFi SSID configuration group selection
+#   * solo (default): Uses wifi_grp/solo_wifi24g.conf and wifi_grp/solo_wifi5g.conf
+#   * grpa: Uses wifi_grp/sta_a_wifi24g.conf and wifi_grp/sta_a_wifi5g.conf
+#   * grpb: Uses wifi_grp/sta_b_wifi24g.conf and wifi_grp/sta_b_wifi5g.conf
+# - Empty -s parameter defaults to solo configuration
+# - Changed default iperf interval from 5 seconds to 1 second for detailed logging
+# - Configuration files are now dynamically set based on SSID_GROUP parameter
+# - Enhanced help system with SSID group examples and usage patterns
+#################################################################################
 
 # Function to check wlan0 interface availability
 check_wlan0_interface() {

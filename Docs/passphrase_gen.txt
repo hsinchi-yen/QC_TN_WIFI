@@ -1,0 +1,24 @@
+solo :
+
+wpa_passphrase PD-RF-QC-2-4 12345678 > solo_wifi24g.conf
+
+wpa_passphrase PD-RF-QC-5 12345678 > solo_wifi5g.conf
+
+-----
+
+group 1:
+
+
+wpa_passphrase PD-RF-QC-2-4-STA-A 12345678 > sta_a_wifi24g.conf
+
+wpa_passphrase PD-RF-QC-5-STA-A 12345678 > sta_a_wifi5g.conf
+-----
+
+
+group 2:
+
+wpa_passphrase PD-RF-QC-2-4-STA-B 12345678 > sta_b_wifi24g.conf
+
+wpa_passphrase PD-RF-QC-5-STA-B 12345678 > sta_b_wifi5g.conf
+
+

@@ -1,5 +1,22 @@
 #!/bin/sh
 
+#################################################################################
+# Bluetooth Ping Test Script for QCA9377
+#
+# This script performs Bluetooth connectivity testing using l2ping
+# Supports automatic HCI device detection and MAC address scanning
+#
+# Change Log:
+# -----------
+# 2025-12-24: HCI Device Detection Error Handling Enhancement
+# - Added explicit HCI device validation after 20-second driver initialization wait
+# - Comprehensive error output when hciif is empty with diagnostic information
+# - Outputs "Bluetooth Test Result: FAILED" message when HCI device not detected
+# - Explicit exit code handling: ok=1 → exit 0 (pass), ok=0 → exit 1 (fail)
+# - Ensures GUI can properly read test results even when HCI device fails
+# - Prevents test from hanging indefinitely when hci0/hciX devices don't appear
+#################################################################################
+
 RSSI_LIMIT=-60
 
 # Stop existing processes function

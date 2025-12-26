@@ -1,0 +1,45 @@
+Folder Name : wifi_grp
+
+solo :
+SSID Name and config name
+
+2.4G SSID : PD-RF-QC-2-4
+CH: 1, 6 , 11 (not overlay with other station)
+pwd : 12345678
+config file : /wifi_grp/wifi24g.conf
+
+5G SSID : PD-RF-QC-5
+CH: 36/40/44/48
+pwd : 12345678
+config file : /wifi_grp/wifi5g.conf
+
+-------------------------------------------
+
+
+1st group:
+
+SSID Name and config name
+
+2.4G SSID : PD-RF-QC-2-4-STA-A
+CH: 1, 6 , 11 (not overlay with other station)
+pwd : 12345678
+config file : /wifi_grp/sta_a_wifi24g.conf
+
+5G SSID : PD-RF-QC-5-STA-A
+CH: 36/40/44/4
+pwd : 12345678
+config file : /wifi_grp/sta_a_wifi5g.conf 
+
+
+----------------------------------
+2nd group:
+2.4G SSID : PD-RF-QC-2-4-STA-B
+CH: 1, 6 , 11 (not overlay with other station)
+pwd : 12345678
+config file : /wifi_grp/sta_b_wifi5g.conf 
+
+
+5G SSID : PD-RF-QC-5-STA-B
+CH: 36/40/44/4
+pwd : 12345678
+config file : /wifi_grp/sta_b_wifi5g.conf 

@@ -5,6 +5,22 @@ WiFi Stress Test Tool for Production Line
 Author: Production Test Team
 Date: 2025-12-11
 Description: UART-based WiFi throughput test tool for QCA9377 on SoM platforms.
+
+Change Log:
+-----------
+2025-12-24: UI Layout Reorganization
+  - Moved Logo (QSvgWidget) to leftmost position in title bar
+  - Repositioned Configuration section below Device Information
+  - Moved Test Status section above Test Execution Log
+  - Cleaned up duplicate widget definitions (reduced ~463 lines)
+  - Final layout order: Title(Logo left) → Device Info → Configuration → 
+    Control Buttons → Test Status → Log Display
+
+2025-12-24: SSID Group Selection Enhancement
+  - Added WIFI Station combo box (Solo/Station A/Station B) in Configuration
+  - Integrated with wifi_test.sh -s parameter (solo/grpa/grpb)
+  - Enables flexible SSID group selection for multi-station testing
+  - Maps to wifi_grp/ configuration files (solo_wifi*.conf, sta_a_wifi*.conf, sta_b_wifi*.conf)
 """
 
 import sys
@@ -667,6 +683,10 @@ class WiFiTestGUI(QMainWindow):
         self.test_elapsed_seconds = 0
         self.host_bt_mac = ""  # 初始化 BT MAC 變數
         self.test_terminated = False  # 測試是否被終止的旗標
+        # 設定預設 Log 儲存路徑為使用者家目錄下的 Documents/
+        self.log_save_path = os.path.expanduser("~/Documents/")
+        # 高級模式標記（控制 L0/L1/L3 和自定義秒數的顯示）
+        self.advanced_mode = False
         self.init_ui()
         self.refresh_ports()
         
@@ -686,7 +706,7 @@ class WiFiTestGUI(QMainWindow):
         title_layout = QHBoxLayout()
         
         # 左側 Logo
-        logo_path = "technexion_logo103770.svg"
+        logo_path = "technexion_logo.svg"
         if os.path.exists(logo_path):
             logo_widget = QSvgWidget(logo_path)
             logo_widget.setFixedSize(200, 50)  # 調整 Logo 大小
@@ -862,6 +882,7 @@ class WiFiTestGUI(QMainWindow):
         # Test Level 選項
         config_layout.addWidget(QLabel("Test Level:"))
         
+        # L0 按鈕（初始隱藏）
         self.level_l0_btn = QPushButton("L0")
         self.level_l0_btn.setCheckable(True)
         self.level_l0_btn.setChecked(False)
@@ -886,8 +907,10 @@ class WiFiTestGUI(QMainWindow):
                 background-color: #138d75;
             }
         """)
+        self.level_l0_btn.setVisible(False)  # 初始隱藏
         config_layout.addWidget(self.level_l0_btn)
         
+        # L1 按鈕（初始隱藏）
         self.level_l1_btn = QPushButton("L1")
         self.level_l1_btn.setCheckable(True)
         self.level_l1_btn.setChecked(False)
@@ -912,8 +935,10 @@ class WiFiTestGUI(QMainWindow):
                 background-color: #138d75;
             }
         """)
+        self.level_l1_btn.setVisible(False)  # 初始隱藏
         config_layout.addWidget(self.level_l1_btn)
         
+        # L2 按鈕（預設顯示並選中）
         self.level_l2_btn = QPushButton("L2")
         self.level_l2_btn.setCheckable(True)
         self.level_l2_btn.setChecked(True)  # 預設選擇 L2
@@ -940,6 +965,7 @@ class WiFiTestGUI(QMainWindow):
         """)
         config_layout.addWidget(self.level_l2_btn)
         
+        # L3 按鈕（初始隱藏）
         self.level_l3_btn = QPushButton("L3")
         self.level_l3_btn.setCheckable(True)
         self.level_l3_btn.setChecked(False)
@@ -964,7 +990,30 @@ class WiFiTestGUI(QMainWindow):
                 background-color: #138d75;
             }
         """)
+        self.level_l3_btn.setVisible(False)  # 初始隱藏
         config_layout.addWidget(self.level_l3_btn)
+        
+        # 自定義秒數輸入框（初始隱藏）
+        self.custom_duration_input = QLineEdit()
+        self.custom_duration_input.setPlaceholderText("Custom (10-86400)")
+        self.custom_duration_input.setMinimumHeight(40)
+        self.custom_duration_input.setMaximumWidth(150)
+        self.custom_duration_input.setStyleSheet("""
+            QLineEdit {
+                padding: 5px;
+                border: 2px solid #16a085;
+                border-radius: 5px;
+                background-color: white;
+                font-size: 12px;
+                font-weight: bold;
+            }
+            QLineEdit:focus {
+                border: 2px solid #138d75;
+            }
+        """)
+        self.custom_duration_input.textChanged.connect(self.on_custom_duration_changed)
+        self.custom_duration_input.setVisible(False)  # 初始隱藏
+        config_layout.addWidget(self.custom_duration_input)
         
         config_layout.addStretch()
         
@@ -1269,10 +1318,49 @@ class WiFiTestGUI(QMainWindow):
         log_layout = QVBoxLayout()
         log_group.setLayout(log_layout)
         
-        # Watch button - placed in log header area
+        # Log header with path selection and watch button
         log_header_layout = QHBoxLayout()
+        
+        # 左側：Log 儲存路徑選擇
+        log_path_label = QLabel("Log Path:")
+        log_path_label.setStyleSheet("font-weight: normal; font-size: 11px;")
+        log_header_layout.addWidget(log_path_label)
+        
+        self.log_path_display = QLineEdit()
+        self.log_path_display.setText(self.log_save_path)
+        self.log_path_display.setReadOnly(True)
+        self.log_path_display.setMinimumWidth(300)
+        self.log_path_display.setStyleSheet("""
+            QLineEdit {
+                padding: 3px;
+                border: 1px solid #95a5a6;
+                border-radius: 3px;
+                background-color: #ecf0f1;
+                font-size: 10px;
+            }
+        """)
+        log_header_layout.addWidget(self.log_path_display)
+        
+        self.browse_path_btn = QPushButton("Browse...")
+        self.browse_path_btn.clicked.connect(self.browse_log_path)
+        self.browse_path_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #95a5a6;
+                color: white;
+                border: none;
+                padding: 5px 15px;
+                border-radius: 3px;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #7f8c8d;
+            }
+        """)
+        log_header_layout.addWidget(self.browse_path_btn)
+        
         log_header_layout.addStretch()
         
+        # 右側：Watch button
         self.watch_btn = QPushButton("Watch")
         self.watch_btn.clicked.connect(self.toggle_watch_mode)
         self.watch_btn.setStyleSheet("""
@@ -1314,6 +1402,12 @@ class WiFiTestGUI(QMainWindow):
         self.test_timer = QTimer()
         self.test_timer.timeout.connect(self.update_test_time)
         self.test_timer.setInterval(1000)  # 每秒更新
+        
+        # 快捷鍵序列追蹤
+        self.key_sequence = []
+        self.key_sequence_timer = QTimer()
+        self.key_sequence_timer.setSingleShot(True)
+        self.key_sequence_timer.timeout.connect(self.reset_key_sequence)
         
     def refresh_ports(self):
         """刷新可用串口列表"""
@@ -1508,27 +1602,118 @@ class WiFiTestGUI(QMainWindow):
             self.band_5g_btn.setEnabled(True)
             self.band_24g_btn.setEnabled(True)
     
+    def keyPressEvent(self, event):
+        """處理快捷鍵事件"""
+        from PyQt5.QtCore import Qt
+        
+        # 檢測 Ctrl+Shift 組合
+        if event.modifiers() == (Qt.ControlModifier | Qt.ShiftModifier):
+            # 使用 key() 來獲取按鍵，不使用 text()
+            key = event.key()
+            
+            # 將按鍵代碼轉換為字母
+            if key == Qt.Key_L:
+                self.key_sequence.append('L')
+                self.key_sequence_timer.start(1000)
+            elif key == Qt.Key_V:
+                self.key_sequence.append('V')
+                self.key_sequence_timer.start(1000)
+            elif key == Qt.Key_O:
+                self.key_sequence.append('O')
+                self.key_sequence_timer.start(1000)
+            
+            # 檢查是否完成 L-V-O 序列
+            if len(self.key_sequence) >= 3:
+                if self.key_sequence[-3:] == ['L', 'V', 'O']:
+                    self.toggle_advanced_mode()
+                    self.key_sequence.clear()
+                    self.key_sequence_timer.stop()
+                    return  # 不繼續傳遞事件
+        else:
+            # 其他按鍵重置序列
+            if self.key_sequence:  # 只在有序列時才重置
+                self.key_sequence.clear()
+                self.key_sequence_timer.stop()
+        
+        super().keyPressEvent(event)
+    
+    def reset_key_sequence(self):
+        """重置按鍵序列（超時）"""
+        self.key_sequence.clear()
+    
+    def toggle_advanced_mode(self):
+        """切換高級模式（顯示/隱藏 L0/L1/L3 和自定義輸入）"""
+        self.advanced_mode = not self.advanced_mode
+        
+        # 切換 L0, L1, L3 按鈕的可見性
+        self.level_l0_btn.setVisible(self.advanced_mode)
+        self.level_l1_btn.setVisible(self.advanced_mode)
+        self.level_l3_btn.setVisible(self.advanced_mode)
+        self.custom_duration_input.setVisible(self.advanced_mode)
+        
+        if self.advanced_mode:
+            self.log_display.append("\n>>> Advanced mode enabled (Ctrl+Shift+L+V+O)")
+            self.log_display.append(">>> Additional test levels available: L0, L1, L3, Custom")
+        else:
+            self.log_display.append("\n>>> Advanced mode disabled")
+            self.log_display.append(">>> Only L2 level available")
+            # 如果當前選擇的是隱藏的選項，切回 L2
+            if self.level_l0_btn.isChecked() or self.level_l1_btn.isChecked() or self.level_l3_btn.isChecked():
+                self.select_test_level("l2")
+            # 清空自定義輸入
+            self.custom_duration_input.clear()
+    
+    def on_custom_duration_changed(self, text):
+        """處理自定義秒數輸入變更"""
+        if text:
+            # 當有輸入時，取消其他按鈕的選中狀態
+            self.level_l0_btn.setChecked(False)
+            self.level_l1_btn.setChecked(False)
+            self.level_l2_btn.setChecked(False)
+            self.level_l3_btn.setChecked(False)
+    
+    def validate_custom_duration(self):
+        """驗證自定義秒數輸入"""
+        text = self.custom_duration_input.text().strip()
+        
+        if not text:
+            return None, "Custom duration is empty"
+        
+        try:
+            duration = int(text)
+        except ValueError:
+            return None, f"Invalid input: '{text}' is not an integer"
+        
+        if duration == 0:
+            return None, "Duration cannot be 0"
+        
+        if duration < 10:
+            return None, f"Duration {duration} is too short (minimum: 10 seconds)"
+        
+        if duration > 86400:
+            return None, f"Duration {duration} is too long (maximum: 86400 seconds)"
+        
+        return duration, None
+    
     def select_test_level(self, level):
         """選擇 Test Level"""
+        # 取消所有按鈕選中
+        self.level_l0_btn.setChecked(False)
+        self.level_l1_btn.setChecked(False)
+        self.level_l2_btn.setChecked(False)
+        self.level_l3_btn.setChecked(False)
+        
+        # 清空自定義輸入
+        self.custom_duration_input.clear()
+        
+        # 選中對應按鈕
         if level == "l0":
             self.level_l0_btn.setChecked(True)
-            self.level_l1_btn.setChecked(False)
-            self.level_l2_btn.setChecked(False)
-            self.level_l3_btn.setChecked(False)
         elif level == "l1":
-            self.level_l0_btn.setChecked(False)
             self.level_l1_btn.setChecked(True)
-            self.level_l2_btn.setChecked(False)
-            self.level_l3_btn.setChecked(False)
         elif level == "l2":
-            self.level_l0_btn.setChecked(False)
-            self.level_l1_btn.setChecked(False)
             self.level_l2_btn.setChecked(True)
-            self.level_l3_btn.setChecked(False)
-        else:  # l3
-            self.level_l0_btn.setChecked(False)
-            self.level_l1_btn.setChecked(False)
-            self.level_l2_btn.setChecked(False)
+        elif level == "l3":
             self.level_l3_btn.setChecked(True)
     
     def select_band(self, band):
@@ -1686,6 +1871,24 @@ class WiFiTestGUI(QMainWindow):
             }}
         """)
         self.status_label.setText(status)
+    
+    def browse_log_path(self):
+        """瀏覽並選擇 Log 儲存路徑"""
+        from PyQt5.QtWidgets import QFileDialog
+        
+        # 開啟資料夾選擇對話框
+        selected_path = QFileDialog.getExistingDirectory(
+            self,
+            "Select Log Save Directory",
+            self.log_save_path,
+            QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks
+        )
+        
+        # 如果使用者選擇了路徑（未取消）
+        if selected_path:
+            self.log_save_path = selected_path
+            self.log_path_display.setText(self.log_save_path)
+            self.log_display.append(f"\nLog save path updated: {self.log_save_path}")
     
     def toggle_watch_mode(self):
         """Toggle watch mode on/off"""
@@ -1848,7 +2051,22 @@ class WiFiTestGUI(QMainWindow):
         bt_disabled = self.bt_disable_btn.isChecked()
         
         # 檢查 Test Level
-        if self.level_l0_btn.isChecked():
+        test_level = "l2"  # 預設
+        custom_duration = None
+        
+        # 檢查是否使用自定義秒數
+        if self.custom_duration_input.text().strip():
+            duration, error = self.validate_custom_duration()
+            if error:
+                self.log_display.append(f"\nERROR: {error}")
+                self.log_display.append("Please enter a valid duration (10-86400 seconds)")
+                self.start_btn.setEnabled(True)
+                self.watch_btn.setEnabled(True)
+                self.terminate_btn.setEnabled(False)
+                return
+            custom_duration = duration
+            test_level = f"{duration}"  # 使用自定義秒數
+        elif self.level_l0_btn.isChecked():
             test_level = "l0"
         elif self.level_l1_btn.isChecked():
             test_level = "l1"
@@ -2019,11 +2237,20 @@ class WiFiTestGUI(QMainWindow):
     
     def save_log(self, wifi_result, bt_result, log_content, bt_mac):
         """保存Log文件"""
-        # 創建wifilogs目錄 (包含日期)
+        # 使用使用者選擇的路徑，在其中創建日期資料夾
         date_folder = datetime.now().strftime("%Y%m%d")
-        log_dir = f"wifi_stress_log_{date_folder}"
-        if not os.path.exists(log_dir):
-            os.makedirs(log_dir)
+        log_dir = os.path.join(self.log_save_path, f"wifi_stress_log_{date_folder}")
+        
+        # 確保路徑存在，若不存在則創建
+        try:
+            if not os.path.exists(log_dir):
+                os.makedirs(log_dir)
+        except Exception as e:
+            self.log_display.append(f"\nERROR creating log directory: {str(e)}")
+            # 如果創建失敗，使用當前目錄作為備用
+            log_dir = f"wifi_stress_log_{date_folder}"
+            if not os.path.exists(log_dir):
+                os.makedirs(log_dir)
         
         # 計算最終結果
         if bt_result == "SKIP":
