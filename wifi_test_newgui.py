@@ -2,12 +2,25 @@
 # -*- coding: utf-8 -*-
 """
 WiFi Stress Test Tool for Production Line
-Author: Production Test Team
+Author: SIT, Lance Yen
 Date: 2025-12-11
 Description: UART-based WiFi throughput test tool for QCA9377 on SoM platforms.
 
 Change Log:
 -----------
+2026-01-02: Log Filename Format Enhancement
+  - Modified log filename format to support dual MAC addresses
+  - Format changed from: DATE_TIME_SN_MAC_RESULT.txt
+    to: DATE_TIME_SN_MAC1_MAC2_RESULT.txt
+  - Input format: SN,MAC1,MAC2 (e.g., 217522140692,001F7B1E2A54,001F7B1E2A55)
+  - Supports three input formats:
+    * SN,MAC (single 12-hex MAC): MAC1=MAC, MAC2=dummy
+    * SN,MAC1,MAC2 (two 12-hex MACs): MAC1=first MAC, MAC2=second MAC
+    * SN,001F,7B1E2A54 (scanner split MAC): MAC1=001F7B1E2A54, MAC2=dummy
+  - Updated _extract_sn_mac() to return (sn, mac1, mac2) tuple
+  - Enhanced on_sn_mac_changed() validation to correctly detect dual MAC format
+  - Example output: 20260102_143025_217522140692_001F7B1E2A54_001F7B1E2A55_PASS.txt
+
 2025-12-24: UI Layout Reorganization
   - Moved Logo (QSvgWidget) to leftmost position in title bar
   - Repositioned Configuration section below Device Information
@@ -21,12 +34,75 @@ Change Log:
   - Integrated with wifi_test.sh -s parameter (solo/grpa/grpb)
   - Enables flexible SSID group selection for multi-station testing
   - Maps to wifi_grp/ configuration files (solo_wifi*.conf, sta_a_wifi*.conf, sta_b_wifi*.conf)
+
 """
+
+# GUI version (shown in window title / header). Update this for each release.
+APP_VERSION = "2026.01.02"
+APP_WINDOW_TITLE_BASE = "WiFi Test Tool - Designed by TechNexion"
+APP_HEADER_TITLE_BASE = "WiFi / Bluetooth Stress Test"
+
+
+def _normalize_startup_station(value: str) -> str:
+    """Normalize external station selector to one of: SOLO / STA-A / STA-B."""
+    if not value:
+        return "SOLO"
+
+    v = value.strip().upper()
+    v = v.replace("_", "-")
+
+    if v in {"SOLO", "S"}:
+        return "SOLO"
+    if v in {"STA-A", "STATION-A", "STATION A", "A", "STAA"}:
+        return "STA-A"
+    if v in {"STA-B", "STATION-B", "STATION B", "B", "STAB"}:
+        return "STA-B"
+
+    return "SOLO"
+
+
+def parse_startup_options(argv):
+    """Parse external startup options without breaking Qt argv parsing.
+
+    Supported:
+      - Environment variable: WIFI_STATION=STA-A|STA-B|SOLO
+      - CLI argument: --station STA-A|STA-B|SOLO
+      - CLI argument: --station=STA-A|STA-B|SOLO
+
+    Returns:
+      (startup_station, qt_argv)
+    """
+    station_raw = os.environ.get("WIFI_STATION", "")
+
+    qt_argv = [argv[0]] if argv else []
+    i = 1
+    while argv and i < len(argv):
+        arg = argv[i]
+
+        if isinstance(arg, str) and arg.startswith("--station="):
+            station_raw = arg.split("=", 1)[1]
+            i += 1
+            continue
+
+        if arg == "--station":
+            if i + 1 < len(argv):
+                station_raw = argv[i + 1]
+                i += 2
+            else:
+                i += 1
+            continue
+
+        qt_argv.append(arg)
+        i += 1
+
+    return _normalize_startup_station(station_raw), qt_argv
 
 import sys
 import os
 import serial
 import serial.tools.list_ports
+import shutil
+import subprocess
 from datetime import datetime
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QComboBox, QPushButton, 
@@ -135,8 +211,8 @@ class ResultDialog(QDialog):
         self.setLayout(layout)
     
     def setup_timer(self):
-        """設置10秒自動關閉計時器"""
-        self.countdown_seconds = 10
+        """設置60秒自動關閉計時器"""
+        self.countdown_seconds = 60
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_countdown)
         self.timer.start(1000)  # 每秒更新一次
@@ -675,8 +751,9 @@ class ConsoleWatchWorker(QThread):
 class WiFiTestGUI(QMainWindow):
     """WiFi壓力測試主視窗"""
     
-    def __init__(self):
+    def __init__(self, startup_station: str = "SOLO"):
         super().__init__()
+        self.startup_station = startup_station
         self.serial_worker = None
         self.watch_worker = None
         self.watch_mode = False
@@ -687,12 +764,153 @@ class WiFiTestGUI(QMainWindow):
         self.log_save_path = os.path.expanduser("~/Documents/")
         # 高級模式標記（控制 L0/L1/L3 和自定義秒數的顯示）
         self.advanced_mode = False
+
+        # BT keep-alive timestamp (throttle expensive operations)
+        self._bt_keepalive_last_ts = 0.0
+
+        # Auto-start debounce timer:
+        # Barcode scanners often type SN first, then append ",MAC1,MAC2".
+        # If we auto-start immediately when SN length >= 12, the test may start
+        # before MACs arrive, causing log filenames to become dummy_dummy.
+        self._auto_start_delay_ms = 600
+        self._auto_start_timer = QTimer(self)
+        self._auto_start_timer.setSingleShot(True)
+        self._auto_start_timer.timeout.connect(self._auto_start_if_ready)
+
         self.init_ui()
         self.refresh_ports()
+
+    def _is_bt_enabled(self) -> bool:
+        # BT Disable button implies no BT test usage.
+        return not (hasattr(self, "bt_disable_btn") and self.bt_disable_btn.isChecked())
+
+    def _run_cmd_quiet(self, args, timeout=3):
+        try:
+            return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        except Exception:
+            return None
+
+    def _ensure_host_bt_active(self, force: bool = False):
+        """Try to keep host BT adapter active/connectable to improve DUT BT success.
+
+        Goal:
+        - Make host connectable (page scan) and discoverable (inquiry scan) for Classic BT.
+        - Avoid repeated disruptive resets by throttling unless force=True.
+        """
+        if os.name != "posix":
+            return
+
+        now = time.time()
+        if not force and (now - self._bt_keepalive_last_ts) < 20.0:
+            return
+        self._bt_keepalive_last_ts = now
+
+        def _has(cmd: str) -> bool:
+            return shutil.which(cmd) is not None
+
+        # Unblock BT if rfkill is present.
+        if _has("rfkill"):
+            self._run_cmd_quiet(["rfkill", "unblock", "bluetooth"], timeout=2)
+
+        # Prefer btmgmt if available (more reliable control than hcitool).
+        if _has("btmgmt"):
+            # These commands are safe even if already set.
+            self._run_cmd_quiet(["btmgmt", "power", "on"], timeout=3)
+            self._run_cmd_quiet(["btmgmt", "connectable", "on"], timeout=3)
+            self._run_cmd_quiet(["btmgmt", "discoverable", "on"], timeout=3)
+            self._run_cmd_quiet(["btmgmt", "pairable", "on"], timeout=3)
+
+        if not _has("hciconfig"):
+            return
+
+        # Enumerate hci interfaces.
+        res = self._run_cmd_quiet(["hciconfig", "-a"], timeout=3)
+        if res is None:
+            return
+
+        interfaces = []
+        for line in (res.stdout or "").splitlines():
+            if line.startswith("hci") and ":" in line:
+                interfaces.append(line.split(":", 1)[0].strip())
+
+        if not interfaces:
+            return
+
+        # Make host connectable/discoverable for Classic inquiry/page scan.
+        for iface in interfaces:
+            if force:
+                # Reset can recover flaky states; only do this on forced path.
+                self._run_cmd_quiet(["hciconfig", iface, "reset"], timeout=3)
+                time.sleep(0.2)
+
+            self._run_cmd_quiet(["hciconfig", iface, "up"], timeout=3)
+            # piscan = page scan + inquiry scan
+            self._run_cmd_quiet(["hciconfig", iface, "piscan"], timeout=3)
+
+    def _auto_start_if_ready(self):
+        """Debounced auto-start based on the *current* SN/MAC field contents."""
+        if not hasattr(self, "sn_mac_input"):
+            return
+
+        # If we're already testing, do nothing.
+        if not self.start_btn.isEnabled():
+            return
+
+        text = self.sn_mac_input.text().strip()
+        if not text:
+            return
+
+        def _normalize_mac_candidate(raw: str) -> str:
+            return ''.join(c for c in raw if c.isalnum()).upper()
+
+        def _looks_like_mac12(raw: str) -> bool:
+            mac12 = _normalize_mac_candidate(raw)
+            return len(mac12) == 12 and all(ch in "0123456789ABCDEF" for ch in mac12)
+
+        def _has_valid_mac_fields(raw_text: str) -> bool:
+            parts = [p.strip() for p in raw_text.split(',') if p.strip()]
+            if len(parts) < 2:
+                return False
+
+            mac1_val = _normalize_mac_candidate(parts[1])
+            if len(parts) >= 3:
+                mac2_val = _normalize_mac_candidate(parts[2])
+                # Two full MACs
+                if _looks_like_mac12(mac1_val) and _looks_like_mac12(mac2_val):
+                    return True
+                # Scanner split MAC (4 + 8)
+                if _looks_like_mac12(f"{mac1_val}{mac2_val}"):
+                    return True
+                # Fallback: MAC1 alone
+                return _looks_like_mac12(mac1_val)
+
+            return _looks_like_mac12(mac1_val)
+
+        if ',' in text:
+            sn = text.split(',', 1)[0].strip()
+            if len(sn) >= 8 and _has_valid_mac_fields(text):
+                self.start_test()
+        else:
+            # SN-only mode (kept for backward compatibility)
+            if len(text) >= 12:
+                self.start_test()
+
+    def apply_startup_station_selection(self):
+        """Apply external station selection to the WIFI Station combo."""
+        if not hasattr(self, "station_combo") or self.station_combo is None:
+            return
+
+        station = _normalize_startup_station(self.startup_station)
+        if station == "STA-A":
+            self.station_combo.setCurrentIndex(1)
+        elif station == "STA-B":
+            self.station_combo.setCurrentIndex(2)
+        else:
+            self.station_combo.setCurrentIndex(0)
         
     def init_ui(self):
         """初始化UI"""
-        self.setWindowTitle("WiFi Test Tool - Designed by TechNexion")
+        self.setWindowTitle(f"{APP_WINDOW_TITLE_BASE} - (v{APP_VERSION})")
         self.setGeometry(100, 100, 1000, 700)
         self.setStyleSheet("QMainWindow { background-color: #f0f0f0; }")
         
@@ -709,7 +927,7 @@ class WiFiTestGUI(QMainWindow):
         logo_path = "technexion_logo.svg"
         if os.path.exists(logo_path):
             logo_widget = QSvgWidget(logo_path)
-            logo_widget.setFixedSize(200, 50)  # 調整 Logo 大小
+            logo_widget.setFixedSize(200, 30)  # 調整 Logo 大小
             title_layout.addWidget(logo_widget)
         else:
             # 如果 Logo 不存在，顯示占位空間
@@ -718,7 +936,7 @@ class WiFiTestGUI(QMainWindow):
             title_layout.addWidget(logo_placeholder)
         
         # 中間標題文字
-        title_label = QLabel("WiFi / Bluetooth Stress Test")
+        title_label = QLabel(f"{APP_HEADER_TITLE_BASE}")
         title_font = QFont("Arial", 16, QFont.Bold)
         title_label.setFont(title_font)
         title_label.setAlignment(Qt.AlignCenter)
@@ -777,7 +995,7 @@ class WiFiTestGUI(QMainWindow):
         # SN,MAC輸入
         info_layout.addWidget(QLabel("SN,MAC:"), 1, 0)
         self.sn_mac_input = QLineEdit()
-        self.sn_mac_input.setPlaceholderText("Enter SN,MAC (e.g., 217522140692,001F7B1E2A54)")
+        self.sn_mac_input.setPlaceholderText("Enter SN,MAC1,MAC2 (e.g., 217522140692,001F7B1E2A54,001F7B1E2A55)")
         self.sn_mac_input.textChanged.connect(self.on_sn_mac_changed)
         info_layout.addWidget(self.sn_mac_input, 1, 1)
         
@@ -821,10 +1039,22 @@ class WiFiTestGUI(QMainWindow):
                 padding: 0 5px;
             }
         """)
-        config_layout = QHBoxLayout()
+        config_layout = QGridLayout()
+        config_layout.setContentsMargins(10, 0, 10, 0)
+        config_layout.setHorizontalSpacing(20)
+        config_layout.setVerticalSpacing(8)
+        # Column alignment:
+        #   col0: WiFi Band Priority / Host BT MAC
+        #   col1: Test Level
+        #   col2: BT Priority / WIFI Station
+        config_layout.setColumnStretch(1, 1)
         config_group.setLayout(config_layout)
-        
-        config_layout.addWidget(QLabel("WiFi Band Priority:"))
+
+        band_container = QWidget()
+        band_layout = QHBoxLayout(band_container)
+        band_layout.setContentsMargins(0, 0, 0, 0)
+        band_layout.setSpacing(8)
+        band_layout.addWidget(QLabel("WiFi Band Priority:"))
         
         self.band_5g_btn = QPushButton("5G")
         self.band_5g_btn.setCheckable(True)
@@ -850,7 +1080,7 @@ class WiFiTestGUI(QMainWindow):
                 background-color: #229954;
             }
         """)
-        config_layout.addWidget(self.band_5g_btn)
+        band_layout.addWidget(self.band_5g_btn)
         
         self.band_24g_btn = QPushButton("2.4G")
         self.band_24g_btn.setCheckable(True)
@@ -875,12 +1105,15 @@ class WiFiTestGUI(QMainWindow):
                 background-color: #229954;
             }
         """)
-        config_layout.addWidget(self.band_24g_btn)
-        
-        config_layout.addStretch()
+        band_layout.addWidget(self.band_24g_btn)
+
+        level_container = QWidget()
+        level_layout = QHBoxLayout(level_container)
+        level_layout.setContentsMargins(0, 0, 0, 0)
+        level_layout.setSpacing(8)
         
         # Test Level 選項
-        config_layout.addWidget(QLabel("Test Level:"))
+        level_layout.addWidget(QLabel("Test Level:"))
         
         # L0 按鈕（初始隱藏）
         self.level_l0_btn = QPushButton("L0")
@@ -908,7 +1141,7 @@ class WiFiTestGUI(QMainWindow):
             }
         """)
         self.level_l0_btn.setVisible(False)  # 初始隱藏
-        config_layout.addWidget(self.level_l0_btn)
+        level_layout.addWidget(self.level_l0_btn)
         
         # L1 按鈕（初始隱藏）
         self.level_l1_btn = QPushButton("L1")
@@ -936,7 +1169,7 @@ class WiFiTestGUI(QMainWindow):
             }
         """)
         self.level_l1_btn.setVisible(False)  # 初始隱藏
-        config_layout.addWidget(self.level_l1_btn)
+        level_layout.addWidget(self.level_l1_btn)
         
         # L2 按鈕（預設顯示並選中）
         self.level_l2_btn = QPushButton("L2")
@@ -963,7 +1196,7 @@ class WiFiTestGUI(QMainWindow):
                 background-color: #138d75;
             }
         """)
-        config_layout.addWidget(self.level_l2_btn)
+        level_layout.addWidget(self.level_l2_btn)
         
         # L3 按鈕（初始隱藏）
         self.level_l3_btn = QPushButton("L3")
@@ -991,7 +1224,7 @@ class WiFiTestGUI(QMainWindow):
             }
         """)
         self.level_l3_btn.setVisible(False)  # 初始隱藏
-        config_layout.addWidget(self.level_l3_btn)
+        level_layout.addWidget(self.level_l3_btn)
         
         # 自定義秒數輸入框（初始隱藏）
         self.custom_duration_input = QLineEdit()
@@ -1013,12 +1246,15 @@ class WiFiTestGUI(QMainWindow):
         """)
         self.custom_duration_input.textChanged.connect(self.on_custom_duration_changed)
         self.custom_duration_input.setVisible(False)  # 初始隱藏
-        config_layout.addWidget(self.custom_duration_input)
-        
-        config_layout.addStretch()
+        level_layout.addWidget(self.custom_duration_input)
+        level_layout.addStretch()
         
         # BT Test Priority 選項
-        config_layout.addWidget(QLabel("BT Test Priority:"))
+        btprio_container = QWidget()
+        btprio_layout = QHBoxLayout(btprio_container)
+        btprio_layout.setContentsMargins(0, 0, 0, 0)
+        btprio_layout.setSpacing(8)
+        btprio_layout.addWidget(QLabel("BT Priority:"))
         
         self.bt_wifi_first_btn = QPushButton("WiFi First")
         self.bt_wifi_first_btn.setCheckable(True)
@@ -1044,7 +1280,7 @@ class WiFiTestGUI(QMainWindow):
                 background-color: #2980b9;
             }
         """)
-        config_layout.addWidget(self.bt_wifi_first_btn)
+        btprio_layout.addWidget(self.bt_wifi_first_btn)
         
         self.bt_first_btn = QPushButton("BT First")
         self.bt_first_btn.setCheckable(True)
@@ -1070,7 +1306,7 @@ class WiFiTestGUI(QMainWindow):
                 background-color: #8e44ad;
             }
         """)
-        config_layout.addWidget(self.bt_first_btn)
+        btprio_layout.addWidget(self.bt_first_btn)
         
         self.bt_disable_btn = QPushButton("Disable")
         self.bt_disable_btn.setCheckable(True)
@@ -1096,12 +1332,18 @@ class WiFiTestGUI(QMainWindow):
                 background-color: #c0392b;
             }
         """)
-        config_layout.addWidget(self.bt_disable_btn)
-        
-        config_layout.addStretch()
+        btprio_layout.addWidget(self.bt_disable_btn)
+
+        config_layout.addWidget(band_container, 0, 0, 1, 1)
+        config_layout.addWidget(level_container, 0, 1, 1, 1)
+        config_layout.addWidget(btprio_container, 0, 2, 1, 1)
         
         # BT MAC 下拉選單 (多個裝置時顯示)
-        config_layout.addWidget(QLabel("Host BT MAC:"))
+        hostbt_container = QWidget()
+        hostbt_layout = QHBoxLayout(hostbt_container)
+        hostbt_layout.setContentsMargins(0, 0, 0, 0)
+        hostbt_layout.setSpacing(8)
+        hostbt_layout.addWidget(QLabel("Host BT MAC:"))
         self.bt_mac_combo = QComboBox()
         self.bt_mac_combo.setMinimumWidth(200)
         self.bt_mac_combo.currentIndexChanged.connect(self.on_bt_mac_selected)
@@ -1116,7 +1358,7 @@ class WiFiTestGUI(QMainWindow):
                 background-color: #ecf0f1;
             }
         """)
-        config_layout.addWidget(self.bt_mac_combo)
+        hostbt_layout.addWidget(self.bt_mac_combo)
         
         # BT MAC 文字框 (單一裝置時顯示)
         self.bt_mac_label = QLineEdit()
@@ -1131,17 +1373,20 @@ class WiFiTestGUI(QMainWindow):
             }
         """)
         self.bt_mac_label.setVisible(False)  # 初始隱藏
-        config_layout.addWidget(self.bt_mac_label)
-        
-        config_layout.addStretch()
+        hostbt_layout.addWidget(self.bt_mac_label)
         
         # WIFI Station 選項
-        config_layout.addWidget(QLabel("WIFI Station:"))
+        station_container = QWidget()
+        station_layout = QHBoxLayout(station_container)
+        station_layout.setContentsMargins(0, 0, 0, 0)
+        station_layout.setSpacing(8)
+        station_layout.addWidget(QLabel("WIFI Station:"))
         self.station_combo = QComboBox()
         self.station_combo.addItem("Solo")
         self.station_combo.addItem("Station A")
         self.station_combo.addItem("Station B")
-        self.station_combo.setCurrentIndex(0)  # 預設選擇 Solo
+        self.station_combo.setCurrentIndex(0)  # 預設選擇 Solo（可由外部參數覆蓋）
+        self.apply_startup_station_selection()
         self.station_combo.setMinimumWidth(150)
         self.station_combo.setStyleSheet("""
             QComboBox {
@@ -1173,7 +1418,11 @@ class WiFiTestGUI(QMainWindow):
                 selection-color: white;
             }
         """)
-        config_layout.addWidget(self.station_combo)
+        station_layout.addWidget(self.station_combo)
+
+        # Keep col2 aligned with BT Priority (same column as row0 col2).
+        config_layout.addWidget(hostbt_container, 1, 0, 1, 1)
+        config_layout.addWidget(station_container, 1, 2, 1, 1)
         
         main_layout.addWidget(config_group)
         
@@ -1428,7 +1677,8 @@ class WiFiTestGUI(QMainWindow):
     def detect_bt_mac(self):
         """偵測本機藍牙 MAC 位址"""
         try:
-            import subprocess
+            # Keep host BT active/connectable before reading MAC.
+            self._ensure_host_bt_active(force=False)
             result = subprocess.run(['hciconfig', '-a'], capture_output=True, text=True, timeout=2)
             output = result.stdout
             
@@ -1727,9 +1977,13 @@ class WiFiTestGUI(QMainWindow):
     
     def clear_sn_mac(self):
         """清除 SN,MAC 欄位並重新啟用輸入"""
+        # Cancel any pending auto-start.
+        if hasattr(self, "_auto_start_timer") and self._auto_start_timer is not None:
+            self._auto_start_timer.stop()
+
         # 清空 SN,MAC 輸入
         self.sn_mac_input.clear()
-        self.sn_mac_input.setPlaceholderText("Enter SN,MAC (e.g., 217522140692,001F7B1E2A54)")
+        self.sn_mac_input.setPlaceholderText("Enter SN,MAC1,MAC2 (e.g., 217522140692,001F7B1E2A54,001F7B1E2A55)")
         
         # 重置 WiFi 和 BT 狀態顯示為初始狀態 (---)
         self.update_test_status_color(self.wifi_status_label, "IDLE")
@@ -1771,25 +2025,18 @@ class WiFiTestGUI(QMainWindow):
         # 如果正在測試中，不處理
         if not self.start_btn.isEnabled():
             return
-        
+
+        # Debounce auto-start to avoid triggering before scanner finishes
+        # sending the full "SN,MAC1,MAC2" string.
         text = text.strip()
-        
-        # 檢查格式: SN,MAC 或只有 SN
-        if ',' in text:
-            parts = text.split(',')
-            if len(parts) >= 2:
-                sn = parts[0].strip()
-                mac = parts[1].strip()
-                
-                # SN 至少 8 位，MAC 至少 12 位
-                if len(sn) >= 8 and len(mac) >= 12:
-                    # 符合條件，自動啟動測試
-                    QTimer.singleShot(100, self.start_test)
-        else:
-            # 只有 SN，至少 12 位
-            if len(text) >= 12:
-                # 符合條件，自動啟動測試
-                QTimer.singleShot(100, self.start_test)
+        if not text:
+            if hasattr(self, "_auto_start_timer") and self._auto_start_timer is not None:
+                self._auto_start_timer.stop()
+            return
+
+        if hasattr(self, "_auto_start_timer") and self._auto_start_timer is not None:
+            self._auto_start_timer.stop()
+            self._auto_start_timer.start(self._auto_start_delay_ms)
     
     def check_port_connection(self):
         """檢查 UART Port 連接狀態"""
@@ -1858,7 +2105,8 @@ class WiFiTestGUI(QMainWindow):
             "Terminated": "#95a5a6",           # 灰色
             "Stop": "#7f8c8d",                 # 深灰色
             "Device Not Connected": "#e74c3c", # 紅色
-            "Checking": "#f39c12"              # 橙色
+            "Checking": "#f39c12",             # 橙色
+            "Watch": "#17a2b8"                 # 青色 (與Watch按鈕同色)
         }
         
         color = color_map.get(status, "#7f8c8d")
@@ -1934,7 +2182,11 @@ class WiFiTestGUI(QMainWindow):
         """)
         self.start_btn.setEnabled(False)
         self.terminate_btn.setEnabled(False)
-        self.update_status_color("Ready")
+        self.update_status_color("Watch")
+
+        # Keep host BT active (helps BT test stability later without adding UI).
+        if self._is_bt_enabled():
+            self._ensure_host_bt_active(force=False)
         
         # Start watch worker thread
         self.watch_worker = ConsoleWatchWorker(port)
@@ -1970,6 +2222,7 @@ class WiFiTestGUI(QMainWindow):
         """)
         self.start_btn.setEnabled(True)
         self.terminate_btn.setEnabled(False)
+        self.update_status_color("Ready")
         
         # Reset WiFi and BT status to IDLE (like Clear button)
         self.update_test_status_color(self.wifi_status_label, "IDLE")
@@ -1999,24 +2252,80 @@ class WiFiTestGUI(QMainWindow):
         
         # 重置終止旗標
         self.test_terminated = False
+
+        # Keep host BT adapter active/connectable before DUT BT test.
+        if self._is_bt_enabled():
+            # Force path for BT First (more sensitive); otherwise throttled.
+            self._ensure_host_bt_active(force=self.bt_first_btn.isChecked() if hasattr(self, "bt_first_btn") else False)
+            # Refresh the displayed host BT MAC after keep-alive.
+            self.detect_bt_mac()
         
         # 驗證輸入
         if self.port_combo.currentText() == "No valid ports found":
             self.log_display.append("ERROR: No valid UART port selected!")
             return
         
+        def _normalize_mac_candidate(raw: str) -> str:
+            return ''.join(c for c in raw if c.isalnum()).upper()
+
+        def _looks_like_mac12(raw: str) -> bool:
+            mac12 = _normalize_mac_candidate(raw)
+            return len(mac12) == 12 and all(ch in "0123456789ABCDEF" for ch in mac12)
+
+        def _extract_sn_mac(raw_text: str):
+            parts = [p.strip() for p in raw_text.split(',') if p.strip()]
+            if not parts:
+                return "dummy", "dummy", "dummy"
+
+            sn_val = parts[0]
+            if len(parts) < 2:
+                return sn_val, "dummy", "dummy"
+
+            mac1_val = _normalize_mac_candidate(parts[1])
+            mac2_val = "dummy"
+            
+            if len(parts) >= 3:
+                mac2_val = _normalize_mac_candidate(parts[2])
+                
+                # 检查是否都是完整的12位MAC（如：001F7B1E2A54, 001F7B1E2A55）
+                if _looks_like_mac12(mac1_val) and _looks_like_mac12(mac2_val):
+                    # 两个都是完整的12位MAC，保留它们
+                    pass
+                else:
+                    # 检查是否是扫描器分割的MAC（如：001F, 7B1E2A54）
+                    joined = f"{mac1_val}{mac2_val}"
+                    if _looks_like_mac12(joined):
+                        # 合并成一个完整的MAC，MAC2设为dummy
+                        mac1_val = joined
+                        mac2_val = "dummy"
+                    else:
+                        # 无效格式，重置
+                        if _looks_like_mac12(mac1_val):
+                            mac2_val = "dummy"
+                        else:
+                            mac1_val = "dummy"
+                            mac2_val = "dummy"
+            else:
+                # Only MAC1 provided, check if it's valid 12-hex
+                if not _looks_like_mac12(mac1_val):
+                    mac1_val = "dummy"
+
+            return sn_val, mac1_val, mac2_val
+
         # 解析 SN,MAC 輸入
         sn_mac_text = self.sn_mac_input.text().strip()
         if sn_mac_text and ',' in sn_mac_text:
-            parts = sn_mac_text.split(',')
-            sn = parts[0].strip()
-            # 使用第一個 MAC（parts[1]），忽略第二個 MAC（parts[2] 如果存在）
-            mac = parts[1].strip() if len(parts) > 1 else "dummy"
+            sn, mac1, mac2 = _extract_sn_mac(sn_mac_text)
+            mac = f"{mac1}{mac2}" if mac2 != "dummy" else mac1
         elif sn_mac_text:
             sn = sn_mac_text
+            mac1 = "dummy"
+            mac2 = "dummy"
             mac = "dummy"
         else:
             sn = "dummy"
+            mac1 = "dummy"
+            mac2 = "dummy"
             mac = "dummy"
         
         # 獲取串口名稱
@@ -2045,6 +2354,8 @@ class WiFiTestGUI(QMainWindow):
         # 保存 SN 和 MAC 供後續使用
         self.current_sn = sn
         self.current_mac = mac
+        self.current_mac1 = mac1
+        self.current_mac2 = mac2
         
         # 檢查 BT 測試優先順序
         bt_first = self.bt_first_btn.isChecked()
@@ -2258,12 +2569,14 @@ class WiFiTestGUI(QMainWindow):
         else:
             final_result = "PASS" if wifi_result == "PASS" and bt_result == "PASS" else "FAIL"
         
-        # 生成文件名: 日期_SN_MAC_Result.txt
+        # 生成文件名: DATE_TIME_SN_MAC1_MAC2_Result.txt
         date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # 處理 SN 和 MAC，只保留字母數字字元
+        # 處理 SN 和 MAC1/MAC2，只保留字母數字字元
         sn_clean = ''.join(c for c in self.current_sn if c.isalnum())
-        mac_clean = ''.join(c for c in self.current_mac if c.isalnum())
-        filename = f"{date_str}_{sn_clean}_{mac_clean}_{final_result}.txt"
+        mac1_clean = ''.join(c for c in self.current_mac1 if c.isalnum())
+        mac2_clean = ''.join(c for c in self.current_mac2 if c.isalnum())
+        
+        filename = f"{date_str}_{sn_clean}_{mac1_clean}_{mac2_clean}_{final_result}.txt"
         filepath = os.path.join(log_dir, filename)
         
         # 寫入文件
@@ -2297,12 +2610,13 @@ class WiFiTestGUI(QMainWindow):
 
 
 def main():
-    app = QApplication(sys.argv)
+    startup_station, qt_argv = parse_startup_options(sys.argv)
+    app = QApplication(qt_argv)
     
     # 設置應用樣式
     app.setStyle('Fusion')
     
-    window = WiFiTestGUI()
+    window = WiFiTestGUI(startup_station=startup_station)
     window.show()
     
     sys.exit(app.exec_())

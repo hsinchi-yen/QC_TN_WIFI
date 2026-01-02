@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=WiFi Stress Tool
+Comment=WiFi stress test utility
+#Exec=/opt/wifi/WiFiTestTool
+sh -c 'cd /opt/wifitest && ./WiFiTestTool --station STA-A'
+Icon=/opt/wifi/icons/wifi_stress.svg
+Terminal=false
+Categories=Network;Utility;
